@@ -1,5 +1,5 @@
 [project]
-# Workspace root metadata only — this project is not distributed/built.
+# Workspace root metadata only - this project is not distributed/built.
 name = "panoply"
 version = "0.0.0"
 description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
