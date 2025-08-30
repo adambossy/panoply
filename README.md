@@ -45,7 +45,6 @@ Note: This workspace uses uv-managed execution. Prefer running tools via `uv run
 ├─ .pre-commit-config.yaml
 ├─ ruff.toml
 ├─ mypy.ini
-└─ LICENSE
 ```
 
 ## What's included now
