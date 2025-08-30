@@ -1,0 +1,35 @@
+[project]
+name = "panoply"
+version = "0.0.0"
+description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
+requires-python = ">=3.12,<3.13"
+
+# Workspace-level dependency groups for tooling
+[dependency-groups]
+dev = [
+  { include-group = "lint" },
+  { include-group = "typecheck" },
+  { include-group = "test" },
+  "pre-commit",
+]
+lint = [
+  "ruff",
+]
+typecheck = [
+  "mypy",
+]
+test = [
+  "pytest",
+]
+
+[tool.uv]
+# Install both dev and test groups by default when running `uv sync` / `uv run`.
+default-groups = ["dev", "test"]
+
+[tool.uv.workspace]
+# All packages and libraries in the workspace live under these directories.
+members = ["packages/*", "libs/*"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
