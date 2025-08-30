@@ -1,4 +1,5 @@
 [project]
+# Workspace root metadata only — this project is not distributed/built.
 name = "panoply"
 version = "0.0.0"
 description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
@@ -30,6 +31,6 @@ default-groups = ["dev", "test"]
 # All packages and libraries in the workspace live under these directories.
 members = ["packages/*", "libs/*"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# Intentionally omit a build backend at the workspace root so `uv` doesn't try to
+# build/install a root distribution. Workspace packages live under `packages/*` and
+# `libs/*` and have their own build systems.
