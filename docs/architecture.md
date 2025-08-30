@@ -19,7 +19,3 @@ Dependency direction
 Database ownership
 - `libs/db` owns the SQLAlchemy engine/session setup (to be implemented later), common ORM models, and Alembic migrations under `libs/db/alembic/`.
 - Application packages import from `db` rather than creating their own engines or migrations.
-
-Open questions
-- Should a `supabase/` directory (e.g., config.toml, migrations) be tracked alongside Alembic? If yes, define the source of truth and workflow.
-- Observability/logging baselines, if any, to encode across packages.

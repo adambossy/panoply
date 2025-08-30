@@ -15,9 +15,10 @@ libs/db/
 │     └─ __init__.py   # Placeholder for shared ORM models or registry
 ├─ alembic.ini         # Alembic configuration (script_location=alembic)
 └─ alembic/
+   ├─ env.py           # Alembic runtime config (reads DATABASE_URL)
    └─ versions/        # Migration scripts live here
 ```
 
 Notes
 - No runtime logic is implemented yet—this is scaffolding only.
-- Point `DATABASE_URL` in your environment for Alembic operations.
+- Set `DATABASE_URL` in your environment for Alembic operations; `env.py` injects it at runtime.

@@ -1,14 +1,14 @@
 # Contributing
 
 Prerequisites
-- Python 3.12.x (see `.python-version` for the exact patch to use)
+- Python 3.12.6 (see `.python-version` for the exact patch to use)
 - [uv](https://docs.astral.sh/uv/) installed
 
 Setup
 
 ```bash
 uv sync
-pre-commit install
+uv run pre-commit install
 ```
 
 Adding a new package
@@ -37,7 +37,7 @@ uv run --package <dist-name> uvicorn <package_name>.api.main:app --reload --port
 uv run --package <dist-name> pytest -q
 
 # Lint / type-check everything via pre-commit
-pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 Coding standards
@@ -46,8 +46,3 @@ Coding standards
 
 Secrets & environment
 - Do not commit secrets. Copy `.env.example` to `.env` for local development.
-- Open questions: confirm organization-standard secrets management for CI/CD (e.g., GitHub Environments/Actions, 1Password, Doppler, AWS Secrets Manager).
-
-Ambiguities to confirm
-- Python patch version in `.python-version`.
-- Whether to track Supabase config/migrations in a top-level `supabase/` directory and how it interacts with Alembic in `libs/db`.

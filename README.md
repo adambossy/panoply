@@ -5,7 +5,7 @@ Workspace scaffolding for a Python 3.12 monorepo managed with uv. It's designed 
 ## Quickstart
 
 ```bash
-# 1) Ensure Python 3.12.x is installed (see .python-version)
+# 1) Ensure Python 3.12.6 is installed (see .python-version)
 # 2) Install uv: https://docs.astral.sh/uv/
 
 # 3) Install all workspace dependencies (root + members)
@@ -20,6 +20,8 @@ uv run pre-commit install
 # 6) Run repo-wide hooks manually (optional)
 uv run pre-commit run --all-files
 ```
+
+Note: This workspace uses uv-managed execution. Prefer running tools via `uv run <tool>` instead of manually activating a virtualenv; explicit `source .venv/bin/activate` is not required.
 
 ## Common tasks
 
@@ -38,7 +40,7 @@ uv run pre-commit run --all-files
 ├─ docs/
 ├─ scripts/
 ├─ pyproject.toml      # uv workspace + dev/test dependency groups
-├─ .python-version     # Python 3.12.x pin (exact patch to confirm)
+├─ .python-version     # Pinned to Python 3.12.6
 ├─ .env.example        # Required environment variables (no secrets)
 ├─ .pre-commit-config.yaml
 ├─ ruff.toml
@@ -51,10 +53,5 @@ uv run pre-commit run --all-files
 - Baseline tooling: pytest, ruff, mypy, pre-commit (workspace-level dependency groups)
 - Shared database library at `libs/db` with placeholders for SQLAlchemy models, Alembic config, and a Supabase/DB client module
 - Package scaffolding guide at `packages/README.md`
-
-## Open questions
-- Python patch version for `.python-version` (pinned here to a 3.12.x placeholder; please confirm exact 3.12.x to use)
-- Whether to track a `supabase/` directory in-repo and how it should interact with Alembic migrations in `libs/db`
-- Any org-standard secrets management beyond local `.env`
 
 See [docs/architecture.md](docs/architecture.md) and [docs/contributing.md](docs/contributing.md) for more details.
