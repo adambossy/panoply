@@ -1,15 +1,23 @@
-"""Public API interfaces for the ``financial_analysis`` package.
+"""Public API interfaces and orchestration for the ``financial_analysis`` package.
 
-All functions in this module are interface definitions only. Bodies raise
-``NotImplementedError`` by design; no business logic is provided in this
-iteration. Inputs/outputs are documented exactly as requested, along with
-explicit notes on ambiguities that require clarification.
+This module provides the implemented categorization flow
+(:func:`categorize_expenses`) that prepares Canonical Transaction View (CTV)
+records, calls the OpenAI Responses API, and returns aligned results. Other
+interfaces remain stubs and raise ``NotImplementedError`` by design.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
+# Internal helpers (implementation modules)
+from . import prompting
+from .categorization import (
+    ALLOWED_CATEGORIES,
+    ensure_valid_ctv_descriptions,
+    parse_and_align_categories,
+)
 from .models import (
     CategorizedTransaction,
     PartitionPeriod,
@@ -17,36 +25,73 @@ from .models import (
     TransactionPartitions,
     Transactions,
 )
+from .openai_client import post_responses
 
 
 def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTransaction]:
-    """Categorize a collection of transactions using an LLM (interface only).
+    """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
 
-    Input
-    -----
-    transactions:
-        A collection (see :data:`~financial_analysis.models.Transactions`) of
-        :data:`~financial_analysis.models.TransactionRecord` items to
-        categorize.
-
-    Output
-    ------
-    An iterable of transactions, each paired with a category (see
-    :class:`~financial_analysis.models.CategorizedTransaction`).
-
-    Notes
-    -----
-    - The eventual implementation will use a Large Language Model (LLM) to
-      assign categories; however, this API only defines the interface and does
-      not expose model configuration or parameters at this time.
-    - Source schema is unspecified: required column names and types (e.g.,
-      date, amount, description, unique identifiers) need to be confirmed
-      before any implementation.
-    - Category ontology and normalization rules (e.g., allowed labels, casing,
-      hierarchy) are not defined and require clarification.
+    Behavior:
+    - Accepts an iterable of Canonical Transaction View (CTV) mapping objects.
+    - Validates that each item has a non-empty ``description`` after trimming.
+    - Builds a fresh CTV list with ``idx`` assigned 0..N-1 in input order
+      (without mutating caller-provided objects).
+    - Constructs prompts and a strict JSON schema; calls the OpenAI Responses
+      API requesting JSON output for the allowed category set.
+    - Parses and validates the model response, enforcing the category
+      whitelist and alignment by ``idx``.
+    - Returns an iterable of :class:`CategorizedTransaction` in the exact input
+      order, where ``transaction`` is the original mapping object, unmodified.
     """
 
-    raise NotImplementedError
+    # Coerce input to a concrete sequence to preserve order and allow indexing.
+    original_seq_any = list(transactions)
+    if not all(isinstance(item, Mapping) for item in original_seq_any):
+        raise TypeError(
+            "categorize_expenses expects each transaction to be a mapping (CTV) with keys "
+            "like 'idx', 'id', 'description', 'amount', 'date', 'merchant', 'memo'."
+        )
+    original_seq: list[Mapping[str, Any]] = list(original_seq_any)  # precise type
+
+    # Build the CTV objects for the prompt, assigning idx 0..N-1.
+    ctv_for_prompt: list[dict[str, Any]] = []
+    for idx, record in enumerate(original_seq):
+        # Use ``get`` to tolerate absent keys; values propagate as None.
+        ctv_for_prompt.append(
+            {
+                "idx": idx,
+                "id": record.get("id"),
+                "description": record.get("description"),
+                "amount": record.get("amount"),
+                "date": record.get("date"),
+                "merchant": record.get("merchant"),
+                "memo": record.get("memo"),
+            }
+        )
+
+    # Input validation (pre-request).
+    ensure_valid_ctv_descriptions(ctv_for_prompt)
+
+    # Prompts and strict JSON response format.
+    system_instructions = prompting.build_system_instructions()
+    ctv_json = prompting.serialize_ctv_to_json(ctv_for_prompt)
+    user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
+    response_format = prompting.build_response_format(ALLOWED_CATEGORIES)
+
+    # Execute the Responses API call.
+    raw = post_responses(
+        instructions=system_instructions,
+        user_input=user_content,
+        response_format=response_format,
+    )
+
+    # Parse/validate and align by idx back to the original objects.
+    categories_by_idx = parse_and_align_categories(raw, num_items=len(original_seq))
+    results: list[CategorizedTransaction] = [
+        CategorizedTransaction(transaction=original_seq[i], category=categories_by_idx[i])
+        for i in range(len(original_seq))
+    ]
+    return results
 
 
 def identify_refunds(transactions: Transactions) -> Iterable[RefundMatch]:
