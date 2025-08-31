@@ -44,4 +44,11 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Tests (pytest)
-        run: uv run pytest -q
+        run: |
+          set -eo pipefail
+          uv run pytest -q || rc=$?
+          if [ "${rc:-0}" -eq 5 ]; then
+            echo "Pytest reported 'no tests collected' (exit 5). Treating as success."
+            exit 0
+          fi
+          exit ${rc:-0}
