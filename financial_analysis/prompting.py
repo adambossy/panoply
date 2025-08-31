@@ -110,6 +110,7 @@ def build_response_format(allowed_categories: Iterable[str]) -> dict[str, Any]:
     """
 
     return {
+        # Shape aligns with openai.types.responses.ResponseFormatTextJSONSchemaConfigParam
         "type": "json_schema",
         "name": "expense_categories",
         "schema": {

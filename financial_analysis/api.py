@@ -8,8 +8,12 @@ interfaces remain stubs and raise ``NotImplementedError`` by design.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
+
+from openai import OpenAI
+from openai.types.responses import ResponseTextConfigParam
 
 # Internal helpers (implementation modules)
 from . import prompting
@@ -25,7 +29,6 @@ from .models import (
     TransactionPartitions,
     Transactions,
 )
-from .openai_client import post_responses
 
 
 def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTransaction]:
@@ -49,7 +52,7 @@ def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTrans
     if not all(isinstance(item, Mapping) for item in original_seq_any):
         raise TypeError(
             "categorize_expenses expects each transaction to be a mapping (CTV) with keys "
-            "like 'idx', 'id', 'description', 'amount', 'date', 'merchant', 'memo'."
+            "like 'id', 'description', 'amount', 'date', 'merchant', 'memo'."
         )
     original_seq: list[Mapping[str, Any]] = list(original_seq_any)  # precise type
 
@@ -78,15 +81,42 @@ def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTrans
     user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
     response_format = prompting.build_response_format(ALLOWED_CATEGORIES)
 
-    # Execute the Responses API call.
-    raw = post_responses(
+    # Execute the Responses API call via the official OpenAI SDK.
+    client = OpenAI()
+    text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
+    resp = client.responses.create(
+        model="gpt-5",
         instructions=system_instructions,
-        user_input=user_content,
-        response_format=response_format,
+        input=user_content,
+        text=text_cfg,
     )
 
+    # Extract the model JSON from the Responses envelope and decode to Python.
+    # Prefer the SDK's convenience property; fall back to inspecting the first
+    # message/output item if necessary.
+    text: str | None = getattr(resp, "output_text", None)
+    if not text:
+        try:
+            # `resp.output` is a list of items; when present, the first item is
+            # typically a message with `content[0].text` holding the string.
+            first = resp.output[0] if getattr(resp, "output", None) else None
+            content = getattr(first, "content", None)
+            if content and len(content) > 0:
+                maybe_text = getattr(content[0], "text", None)
+                if isinstance(maybe_text, str):
+                    text = maybe_text
+        except Exception:  # noqa: BLE001 - defensive; shape differences are tolerated
+            text = None
+    if not text or not isinstance(text, str):
+        raise ValueError("Unexpected Responses API shape; unable to locate text output")
+
+    try:
+        decoded: Mapping[str, Any] = json.loads(text)
+    except json.JSONDecodeError as e:  # pragma: no cover - minimal defensive path
+        raise ValueError("Model output was not valid JSON per the requested schema") from e
+
     # Parse/validate and align by idx back to the original objects.
-    categories_by_idx = parse_and_align_categories(raw, num_items=len(original_seq))
+    categories_by_idx = parse_and_align_categories(decoded, num_items=len(original_seq))
     results: list[CategorizedTransaction] = [
         CategorizedTransaction(transaction=original_seq[i], category=categories_by_idx[i])
         for i in range(len(original_seq))
