@@ -14,7 +14,6 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-
 # Alembic Config object, which provides access to the values within
 # the .ini file in use.
 config = context.config
@@ -27,7 +26,8 @@ if config.config_file_name is not None:
 db_url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
 if not db_url:
     raise RuntimeError(
-        "DATABASE_URL is not set. Provide it via environment or set 'sqlalchemy.url' in alembic.ini."
+        "DATABASE_URL is not set. Provide it via environment or set "
+        "'sqlalchemy.url' in alembic.ini."
     )
 config.set_main_option("sqlalchemy.url", db_url)
 # Also set the option on the INI section so `engine_from_config` sees it.
