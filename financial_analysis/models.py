@@ -103,6 +103,35 @@ class PartitionPeriod:
     weeks: int | None = None
     days: int | None = None
 
+    def __post_init__(self) -> None:
+        """Validate that at least one positive unit is provided.
+
+        - At least one of ``years``, ``months``, ``weeks``, or ``days`` must
+          be non-``None``.
+        - Any provided value must be a positive integer (> 0).
+        """
+
+        values = {
+            "years": self.years,
+            "months": self.months,
+            "weeks": self.weeks,
+            "days": self.days,
+        }
+
+        if all(v is None for v in values.values()):
+            raise ValueError(
+                "PartitionPeriod requires at least one of years/months/weeks/days to be set"
+            )
+
+        for name, val in values.items():
+            if val is None:
+                continue
+            # Enforce integer and positivity. Booleans are ints; disallow them explicitly.
+            if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
+                raise ValueError(
+                    f"PartitionPeriod.{name} must be a positive integer when set"
+                )
+
 
 # Generic collections
 type Transactions = Iterable[TransactionRecord]

@@ -31,7 +31,8 @@ def main(argv: list[str] | None = None) -> int:
 
     - ``categorize-expenses <csv_path>``
     - ``identify-refunds <csv_path>``
-    - ``partition-transactions <csv_path> <partition_period>``
+    - ``partition-transactions <csv_path> [--years N] [--months N]``
+      ``[--weeks N] [--days N]``
     - ``report-trends <csv_path>``
     - ``review-transaction-categories <csv_path_with_categories>``
 
@@ -84,9 +85,12 @@ def cmd_identify_refunds(csv_path: str) -> int:
 
     Notes
     -----
-    - Mirrors the :func:`financial_analysis.api.identify_refunds` API.
-    - Row indexing base (0-based vs 1-based) and amount column name/format are
-      unspecified and require clarification.
+    - Mirrors the :func:`financial_analysis.api.identify_refunds` feature.
+    - Refund matches are represented as pairs of full
+      :data:`~financial_analysis.models.TransactionRecord` objects (see
+      :class:`~financial_analysis.models.RefundMatch`), not row indices.
+    - The amount column name/format and any date schema or disambiguation rules
+      are unspecified and require clarification.
     - Output format for CLI execution is not specified and requires
       clarification.
     """
@@ -95,16 +99,23 @@ def cmd_identify_refunds(csv_path: str) -> int:
 
 
 def cmd_partition_transactions(csv_path: str, partition_period: str) -> int:
-    """CLI handler for ``partition-transactions <csv_path> <partition_period>`` (stub).
+    """CLI handler for the ``partition-transactions`` subcommand (stub).
+
+    Usage
+    -----
+    ``partition-transactions <csv_path> [--years N] [--months N] [--weeks N] [--days N]``
 
     Parameters
     ----------
     csv_path:
         Path to a CSV file containing transactions.
     partition_period:
-        Period specifier used to divide the transactions. The expected format
-        (e.g., "monthly"/"quarterly" vs a duration expression) is not defined
-        and requires clarification.
+        Period specifier used to divide the transactions. The CLI is expected
+        to accept optional flag arguments ``--years``, ``--months``,
+        ``--weeks``, and ``--days`` (any of which may be provided and
+        combined, e.g., ``--months 3 --weeks 2``). These map directly to the
+        corresponding fields on
+        :class:`financial_analysis.models.PartitionPeriod`.
 
     Returns
     -------
@@ -115,7 +126,7 @@ def cmd_partition_transactions(csv_path: str, partition_period: str) -> int:
     -----
     - Mirrors the :func:`financial_analysis.api.partition_transactions` API.
     - Required date column name/format and timezone/calendar assumptions are
-        unspecified and require clarification.
+      unspecified and require clarification.
     - Output format for CLI execution is not specified and requires
       clarification.
     """
