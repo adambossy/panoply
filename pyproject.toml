@@ -4,6 +4,10 @@ name = "panoply"
 version = "0.0.0"
 description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
 requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.16.5",
+    "sqlalchemy>=2.0.43",
+]
 
 # Workspace-level dependency groups for tooling
 [dependency-groups]
