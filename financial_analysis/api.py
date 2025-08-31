@@ -12,19 +12,22 @@ from collections.abc import Iterable
 
 from .models import (
     CategorizedTransaction,
+    PartitionPeriod,
     RefundMatch,
     TransactionPartitions,
     Transactions,
 )
 
 
-def categorize_expenses(csv_path: str) -> Iterable[CategorizedTransaction]:
-    """Categorize transactions from a bank-exported CSV using an LLM (interface only).
+def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTransaction]:
+    """Categorize a collection of transactions using an LLM (interface only).
 
     Input
     -----
-    csv_path:
-        Path to a CSV file containing bank-exported transactions.
+    transactions:
+        A collection (see :data:`~financial_analysis.models.Transactions`) of
+        :data:`~financial_analysis.models.TransactionRecord` items to
+        categorize.
 
     Output
     ------
@@ -36,9 +39,9 @@ def categorize_expenses(csv_path: str) -> Iterable[CategorizedTransaction]:
     - The eventual implementation will use a Large Language Model (LLM) to
       assign categories; however, this API only defines the interface and does
       not expose model configuration or parameters at this time.
-    - CSV schema is unspecified: required column names and types (e.g., date,
-      amount, description, unique identifiers) need to be confirmed before any
-      implementation.
+    - Source schema is unspecified: required column names and types (e.g.,
+      date, amount, description, unique identifiers) need to be confirmed
+      before any implementation.
     - Category ontology and normalization rules (e.g., allowed labels, casing,
       hierarchy) are not defined and require clarification.
     """
@@ -46,46 +49,46 @@ def categorize_expenses(csv_path: str) -> Iterable[CategorizedTransaction]:
     raise NotImplementedError
 
 
-def identify_refunds(csv_path: str) -> Iterable[RefundMatch]:
-    """Identify expense/refund pairs from a CSV by inverse dollar amounts (interface only).
+def identify_refunds(transactions: Transactions) -> Iterable[RefundMatch]:
+    """Identify expense/refund pairs by inverse amounts (interface only).
 
     Input
     -----
-    csv_path:
-        Path to a CSV file containing transactions.
+    transactions:
+        A collection of :data:`~financial_analysis.models.TransactionRecord`
+        items to search for refund relationships.
 
     Output
     ------
-    An iterable of pairs of row indices, each tuple identifying the expense row
-    and the corresponding refund row in the original CSV (see
-    :class:`~financial_analysis.models.RefundMatch`).
+    An iterable of expense/refund pairs as
+    :class:`~financial_analysis.models.RefundMatch`, where each element holds
+    the full :data:`TransactionRecord` for the expense and its matching
+    refund.
 
     Notes
     -----
-    - Row indexing convention (0-based vs 1-based) is not specified and MUST
-      be clarified. This API does not commit to one or the other.
     - The amount column name and format are unspecified (e.g., whether refunds
       are negative amounts, sign conventions, currency/rounding).
-    - CSV schema for dates and any time-based disambiguation is not defined.
+    - Date schema and any time-based disambiguation rules are not defined.
     """
 
     raise NotImplementedError
 
 
 def partition_transactions(
-    transactions: Transactions, partition_period: object
+    transactions: Transactions, partition_period: PartitionPeriod
 ) -> TransactionPartitions:
-    """Partition a transaction collection into subsets over a period (interface only).
+    """Partition a transaction collection into period-based subsets (interface only).
 
     Input
     -----
     transactions:
         A collection of transaction records.
     partition_period:
-        A period specifier used to partition the transactions. The format for
-        this value is not defined here and requires clarification (e.g., string
-        values such as "monthly"/"quarterly" vs a date duration object or
-        other spec). Timezone and calendar assumptions are also unspecified.
+        A structured period spec (see
+        :class:`~financial_analysis.models.PartitionPeriod`) that supports any
+        combination of ``years``, ``months``, ``weeks``, and ``days``. Each
+        field is optional and the fields are not mutually exclusive.
 
     Output
     ------

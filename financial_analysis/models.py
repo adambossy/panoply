@@ -50,11 +50,12 @@ class CategorizedTransaction:
 
 
 class RefundMatch(NamedTuple):
-    """A pair of row indices indicating an expense and its matching refund.
+    """An expense/refund pairing represented by full records, not indices.
 
-    This explicitly represents two indices into the original CSV rows: the
-    expense row and the refund row. The indexing base (0-based vs 1-based) is
-    intentionally left unspecified and MUST be clarified with stakeholders.
+    Each element is a :data:`TransactionRecord` drawn directly from the
+    provided collection. This replaces earlier row-index based matching to
+    avoid ambiguity about CSV row numbering and to make downstream processing
+    simpler (no re-indexing/lookups required).
 
     Notes
     -----
@@ -64,8 +65,43 @@ class RefundMatch(NamedTuple):
       are not defined here.
     """
 
-    expense_row_index: int
-    refund_row_index: int
+    expense: TransactionRecord
+    """The original expense record from the input collection."""
+
+    refund: TransactionRecord
+    """The corresponding refund record from the input collection."""
+
+
+# ---------------------------------------------------------------------------
+# Partitioning period specification
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class PartitionPeriod:
+    """A structured period spec for partitioning transactions.
+
+    All fields are optional and can be combined (they are not mutually
+    exclusive). Values represent counts of calendar units to use when
+    partitioning a sequence of transactions (e.g., ``months=1`` for monthly
+    partitions, ``weeks=2`` for biweekly, or combinations like ``months=1,
+    days=3``).
+
+    Attributes
+    ----------
+    years:
+        Optional number of years per partition.
+    months:
+        Optional number of months per partition.
+    weeks:
+        Optional number of weeks per partition.
+    days:
+        Optional number of days per partition.
+    """
+
+    years: int | None = None
+    months: int | None = None
+    weeks: int | None = None
+    days: int | None = None
 
 
 # Generic collections

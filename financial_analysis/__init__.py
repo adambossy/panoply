@@ -17,6 +17,7 @@ from .api import (
 )
 from .models import (
     CategorizedTransaction,
+    PartitionPeriod,
     RefundMatch,
     TransactionPartitions,
     TransactionRecord,
@@ -34,6 +35,7 @@ __all__ = [
     "TransactionRecord",
     "CategorizedTransaction",
     "RefundMatch",
+    "PartitionPeriod",
     "Transactions",
     "TransactionPartitions",
 ]
