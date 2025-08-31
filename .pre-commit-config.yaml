@@ -6,13 +6,17 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+  # Run mypy in the uv-managed workspace environment so it resolves workspace deps correctly
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies: []
+        name: mypy (uv)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        args: ["--python-version=3.12"]
 
 ci:
   autofix_commit_msg: "chore(pre-commit): auto-fix lint issues"
   autofix_prs: true
-  skip: []
+  skip: ["mypy"]

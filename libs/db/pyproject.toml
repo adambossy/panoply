@@ -17,5 +17,11 @@ Homepage = "https://github.com/adambossy/panoply"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+include = [
+  "alembic.ini",
+  "alembic/**",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/db"]

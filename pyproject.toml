@@ -24,8 +24,8 @@ test = [
 ]
 
 [tool.uv]
-# Install both dev and test groups by default when running `uv sync` / `uv run`.
-default-groups = ["dev", "test"]
+# Install the dev tools group by default (it already includes `test`).
+default-groups = ["dev"]
 
 [tool.uv.workspace]
 # All packages and libraries in the workspace live under these directories.
