@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.6
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  # Run mypy in the uv-managed workspace environment so it resolves workspace deps correctly
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (uv)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        args: ["--python-version=3.12"]
+
+ci:
+  autofix_commit_msg: "chore(pre-commit): auto-fix lint issues"
+  autofix_prs: true
+  skip: ["mypy"]

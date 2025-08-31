@@ -1,0 +1,36 @@
+[project]
+# Workspace root metadata only - this project is not distributed/built.
+name = "panoply"
+version = "0.0.0"
+description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
+requires-python = ">=3.12,<3.13"
+
+# Workspace-level dependency groups for tooling
+[dependency-groups]
+dev = [
+  { include-group = "lint" },
+  { include-group = "typecheck" },
+  { include-group = "test" },
+  "pre-commit",
+]
+lint = [
+  "ruff",
+]
+typecheck = [
+  "mypy",
+]
+test = [
+  "pytest",
+]
+
+[tool.uv]
+# Install the dev tools group by default (it already includes `test`).
+default-groups = ["dev"]
+
+[tool.uv.workspace]
+# All packages and libraries in the workspace live under these directories.
+members = ["packages/*", "libs/*"]
+
+# Intentionally omit a build backend at the workspace root so `uv` doesn't try to
+# build/install a root distribution. Workspace packages live under `packages/*` and
+# `libs/*` and have their own build systems.
