@@ -76,6 +76,7 @@ class RefundMatch(NamedTuple):
 # Partitioning period specification
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class PartitionPeriod:
     """A structured period spec for partitioning transactions.
@@ -128,9 +129,7 @@ class PartitionPeriod:
                 continue
             # Enforce integer and positivity. Booleans are ints; disallow them explicitly.
             if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
-                raise ValueError(
-                    f"PartitionPeriod.{name} must be a positive integer when set"
-                )
+                raise ValueError(f"PartitionPeriod.{name} must be a positive integer when set")
 
 
 # Generic collections
