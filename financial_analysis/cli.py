@@ -98,7 +98,14 @@ def cmd_identify_refunds(csv_path: str) -> int:
     raise NotImplementedError
 
 
-def cmd_partition_transactions(csv_path: str, partition_period: str) -> int:
+def cmd_partition_transactions(
+    csv_path: str,
+    *,
+    years: int | None = None,
+    months: int | None = None,
+    weeks: int | None = None,
+    days: int | None = None,
+) -> int:
     """CLI handler for the ``partition-transactions`` subcommand (stub).
 
     Usage
@@ -109,13 +116,20 @@ def cmd_partition_transactions(csv_path: str, partition_period: str) -> int:
     ----------
     csv_path:
         Path to a CSV file containing transactions.
-    partition_period:
-        Period specifier used to divide the transactions. The CLI is expected
-        to accept optional flag arguments ``--years``, ``--months``,
-        ``--weeks``, and ``--days`` (any of which may be provided and
-        combined, e.g., ``--months 3 --weeks 2``). These map directly to the
-        corresponding fields on
-        :class:`financial_analysis.models.PartitionPeriod`.
+    years:
+        Optional integer number of years per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.years`.
+    months:
+        Optional integer number of months per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.months`.
+    weeks:
+        Optional integer number of weeks per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.weeks`.
+    days:
+        Optional integer number of days per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.days`.
+
+    Any combination of these flags may be provided (e.g., ``--months 3 --weeks 2``).
 
     Returns
     -------
