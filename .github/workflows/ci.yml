@@ -8,13 +8,16 @@ on:
       - 'ai-*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  python:
-    name: Python 3.12 • Ubuntu
+  lint:
+    name: Lint • Ubuntu
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,7 +26,6 @@ jobs:
       - name: Set up Python (from .python-version)
         uses: actions/setup-python@v5
         with:
-          # Uses the exact patch version pinned in the repo
           python-version-file: .python-version
 
       - name: Set up uv
@@ -37,11 +39,71 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
+  typecheck:
+    name: Typecheck • Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
+
       - name: Type check (mypy)
         run: uv run mypy .
 
+  format_check:
+    name: Format check • Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
+
       - name: Format check (ruff)
         run: uv run ruff format --check .
+
+  test:
+    name: Tests • Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
 
       - name: Tests (pytest)
         run: |
