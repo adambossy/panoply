@@ -23,12 +23,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Normalize and validate database URL from environment or INI.
-db_url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-if not db_url:
+db_url_maybe = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+if db_url_maybe is None or db_url_maybe == "":
     raise RuntimeError(
         "DATABASE_URL is not set. Provide it via environment or set "
         "'sqlalchemy.url' in alembic.ini."
     )
+# At this point the URL is guaranteed non-empty (and thus non-None for mypy).
+db_url: str = db_url_maybe
+
 config.set_main_option("sqlalchemy.url", db_url)
 # Also set the option on the INI section so `engine_from_config` sees it.
 config.set_section_option(config.config_ini_section, "sqlalchemy.url", db_url)
