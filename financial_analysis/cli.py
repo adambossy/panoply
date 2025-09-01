@@ -48,26 +48,102 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def cmd_categorize_expenses(csv_path: str) -> int:
-    """CLI handler for ``categorize-expenses <csv_path>`` (stub).
+    """Categorize expenses from a CSV file and print results to stdout.
+
+    Behavior
+    --------
+    - Reads ``csv_path`` as an AmEx-like CSV export.
+    - Converts rows to Canonical Transaction View (CTV) using the existing
+      adapter at ``financial_analysis.ingest.adapters.amex_like_csv``.
+    - Invokes :func:`financial_analysis.api.categorize_expenses` with the CTV
+      sequence.
+    - Writes one line per transaction to stdout in input order, formatted as
+      ``"<id>\t<category>"`` where ``<id>`` is empty when not present.
+
+    Errors are written to stderr and the function returns a non‑zero exit
+    status. On success, returns ``0``.
 
     Parameters
     ----------
     csv_path:
-        Path to a CSV file containing bank-exported transactions.
-
-    Returns
-    -------
-    int
-        Process exit code. The function is a stub and does not perform I/O.
-
-    Notes
-    -----
-    - Mirrors the :func:`financial_analysis.api.categorize_expenses` API.
-    - Output format for CLI execution (printing vs files; CSV vs JSON) is not
-      specified and requires clarification.
+        Filesystem path to the CSV file.
     """
 
-    raise NotImplementedError
+    import csv
+    import os
+    import sys
+    from collections.abc import Iterable
+
+    # Local imports to keep CLI dependency surface minimal
+    from .api import categorize_expenses
+    from .ingest.adapters.amex_like_csv import to_ctv
+
+    # Validate environment early so failures are clear
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
+        return 1
+
+    # Attempt to open and parse the CSV
+    try:
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+
+            # Verify required headers for the AmEx-like adapter
+            required_headers = {
+                "Reference",
+                "Description",
+                "Amount",
+                "Date",
+                "Appears On Your Statement As",
+                "Extended Details",
+            }
+            headers: Iterable[str] | None = reader.fieldnames
+            if headers is None:
+                print(
+                    f"Error: CSV appears to have no header row: {csv_path}",
+                    file=sys.stderr,
+                )
+                return 1
+            missing = sorted(h for h in required_headers if h not in headers)
+            if missing:
+                print(
+                    "Error: CSV header mismatch for AmEx-like adapter. Missing columns: "
+                    + ", ".join(missing),
+                    file=sys.stderr,
+                )
+                return 1
+
+            # Convert rows to CTV and realize as a list to preserve order
+            ctv_items = list(to_ctv(reader))
+
+    except FileNotFoundError:
+        print(f"Error: File not found: {csv_path}", file=sys.stderr)
+        return 1
+    except PermissionError:
+        print(f"Error: Permission denied: {csv_path}", file=sys.stderr)
+        return 1
+    except csv.Error as e:
+        print(f"Error: Failed to parse CSV: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
+        return 1
+
+    # Call the categorization API and print results
+    try:
+        results = list(categorize_expenses(ctv_items))
+    except Exception as e:
+        # Provide a concise message; the API validates inputs and may raise
+        # ValueError/TypeError for schema or OpenAI/network issues.
+        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        return 1
+
+    # Emit one line per transaction: "<id>\t<category>"
+    for row in results:
+        tx_id = row.transaction.get("id") if isinstance(row.transaction, dict) else None
+        print(f"{tx_id or ''}\t{row.category}")
+
+    return 0
 
 
 def cmd_identify_refunds(csv_path: str) -> int:
