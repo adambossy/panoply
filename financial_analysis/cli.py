@@ -10,9 +10,11 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from dotenv import load_dotenv
+from typer.models import OptionInfo
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -296,8 +298,8 @@ app = typer.Typer(
 
 # Module-level option object to satisfy ruff B008 (no calls in parameter
 # defaults). Typer will inspect this when used as a default value below.
-CSV_PATH_OPTION: Path | None = typer.Option(
-    None,
+CSV_PATH_OPTION: OptionInfo = typer.Option(
+    ...,  # required
     "--csv-path",
     help="Path to an AmEx-like CSV file to categorize",
     dir_okay=False,
@@ -310,7 +312,7 @@ CSV_PATH_OPTION: Path | None = typer.Option(
 @app.callback(invoke_without_command=True)
 def _root(
     ctx: typer.Context,
-    csv_path: Path | None = CSV_PATH_OPTION,
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
 ) -> None:
     """Root command.
 
@@ -323,8 +325,4 @@ def _root(
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
     if ctx.invoked_subcommand is None:
-        if csv_path is None:
-            typer.echo("Error: Missing option '--csv-path'.", err=True)
-            raise typer.Exit(2)
-        exit_code = cmd_categorize_expenses(str(csv_path))
-        raise typer.Exit(exit_code)
+        raise typer.Exit(cmd_categorize_expenses(str(csv_path)))
