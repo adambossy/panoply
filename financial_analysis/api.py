@@ -31,6 +31,45 @@ from .models import (
 )
 
 
+def _extract_response_json_mapping(resp: Any) -> Mapping[str, Any]:
+    """Return the decoded JSON mapping from an OpenAI Responses SDK result.
+
+    Behavior (preserved from the original inline logic in ``categorize_expenses``):
+    - Try the SDK convenience property ``resp.output_text`` first.
+    - Fall back to inspecting the first output item's ``content[0].text`` when
+      necessary.
+    - If no usable text is found, raise ``ValueError`` with the original
+      message.
+    - ``json.loads`` the located text; on failure, raise ``ValueError`` with the
+      original message.
+    """
+
+    # Prefer the SDK's convenience property; fall back to inspecting the first
+    # message/output item if necessary.
+    text: str | None = getattr(resp, "output_text", None)
+    if not text:
+        try:
+            # `resp.output` is a list of items; when present, the first item is
+            # typically a message with `content[0].text` holding the string.
+            first = resp.output[0] if getattr(resp, "output", None) else None
+            content = getattr(first, "content", None)
+            if content and len(content) > 0:
+                maybe_text = getattr(content[0], "text", None)
+                if isinstance(maybe_text, str):
+                    text = maybe_text
+        except Exception:  # noqa: BLE001 - defensive; shape differences are tolerated
+            text = None
+    if not text or not isinstance(text, str):
+        raise ValueError("Unexpected Responses API shape; unable to locate text output")
+
+    try:
+        decoded: Mapping[str, Any] = json.loads(text)
+    except json.JSONDecodeError as e:  # pragma: no cover - minimal defensive path
+        raise ValueError("Model output was not valid JSON per the requested schema") from e
+
+    return decoded
+
+
 def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
 
@@ -92,28 +131,7 @@ def categorize_expenses(transactions: Transactions) -> Iterable[CategorizedTrans
     )
 
     # Extract the model JSON from the Responses envelope and decode to Python.
-    # Prefer the SDK's convenience property; fall back to inspecting the first
-    # message/output item if necessary.
-    text: str | None = getattr(resp, "output_text", None)
-    if not text:
-        try:
-            # `resp.output` is a list of items; when present, the first item is
-            # typically a message with `content[0].text` holding the string.
-            first = resp.output[0] if getattr(resp, "output", None) else None
-            content = getattr(first, "content", None)
-            if content and len(content) > 0:
-                maybe_text = getattr(content[0], "text", None)
-                if isinstance(maybe_text, str):
-                    text = maybe_text
-        except Exception:  # noqa: BLE001 - defensive; shape differences are tolerated
-            text = None
-    if not text or not isinstance(text, str):
-        raise ValueError("Unexpected Responses API shape; unable to locate text output")
-
-    try:
-        decoded: Mapping[str, Any] = json.loads(text)
-    except json.JSONDecodeError as e:  # pragma: no cover - minimal defensive path
-        raise ValueError("Model output was not valid JSON per the requested schema") from e
+    decoded: Mapping[str, Any] = _extract_response_json_mapping(resp)
 
     # Parse/validate and align by idx back to the original objects.
     categories_by_idx = parse_and_align_categories(decoded, num_items=len(original_seq))
