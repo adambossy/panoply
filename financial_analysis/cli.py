@@ -1,13 +1,18 @@
-"""CLI stubs for the ``financial_analysis`` package.
+"""CLI for the ``financial_analysis`` package.
 
-This module intentionally does not depend on any specific argument-parsing
-library. It defines function signatures and docstrings that mirror the public
-API. All callables raise ``NotImplementedError``; printing behavior, file I/O,
-and argument parsing are out of scope for this iteration and require
-clarification.
+This module exposes callable command handlers (e.g.,
+``cmd_categorize_expenses``) and a Typer-based console interface. Environment
+variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
+``python-dotenv`` before delegating to command logic. Business logic lives in
+``financial_analysis.api`` and related modules.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+
+import typer
+from dotenv import load_dotenv
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -276,78 +281,50 @@ def cmd_review_transaction_categories(
     raise NotImplementedError
 
 
-# ---- Console entrypoint for `categorize-expenses` ----------------------------
+# ---- Typer-based console interface -------------------------------------------
 
 
-def _load_dotenv_from_cwd_if_present() -> None:
-    """Load OPENAI_API_KEY from a .env file in the current working directory.
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    help=(
+        "Categorize expenses from an AmEx-like CSV using OpenAI (Responses API). "
+        "Loads OPENAI_API_KEY from a local .env before running."
+    ),
+)
 
-    This is a tiny, dependency-free loader to satisfy the requirement that the
-    command observes OPENAI_API_KEY provided via a repository-root `.env` even
-    when the execution environment doesn't auto-load it.
 
-    Behavior:
-    - Only sets environment variables that are not already present.
-    - Reads KEY=VALUE pairs; ignores blank lines and lines starting with `#`.
-    - Trims surrounding single or double quotes around the VALUE.
-    - Only affects the current process (no filesystem writes).
+# Module-level option object to satisfy ruff B008 (no calls in parameter
+# defaults). Typer will inspect this when used as a default value below.
+CSV_PATH_OPTION: Path | None = typer.Option(
+    None,
+    "--csv-path",
+    help="Path to an AmEx-like CSV file to categorize",
+    dir_okay=False,
+    file_okay=True,
+    exists=False,  # allow non-existent here; the handler will report nice errors
+    readable=True,
+)
+
+
+@app.callback(invoke_without_command=True)
+def _root(
+    ctx: typer.Context,
+    csv_path: Path | None = CSV_PATH_OPTION,
+) -> None:
+    """Root command.
+
+    Loads ``.env`` from the current working directory (without overriding any
+    already-set environment variables) and delegates to
+    :func:`cmd_categorize_expenses` when no subcommand is invoked.
     """
 
-    import os
-    from pathlib import Path
+    # Load environment from .env in CWD (override=False to keep existing env)
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
-    if "OPENAI_API_KEY" in os.environ:
-        return
-    env_path = Path.cwd() / ".env"
-    if not env_path.is_file():
-        return
-    try:
-        for raw in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            key = k.strip()
-            if key != "OPENAI_API_KEY":
-                continue
-            val = v.strip()
-            if (val.startswith('"') and val.endswith('"')) or (
-                val.startswith("'") and val.endswith("'")
-            ):
-                val = val[1:-1]
-            if key not in os.environ:
-                os.environ[key] = val
-    except Exception:
-        # Silent best-effort; cmd handler will validate the env var and report errors.
-        return
-
-
-def main_categorize_expenses(argv: list[str] | None = None) -> int:
-    """Console entrypoint for `categorize-expenses`.
-
-    Parses `--csv-path` and delegates to :func:`cmd_categorize_expenses`.
-    Returns the integer exit code produced by the command handler.
-    """
-
-    import argparse
-    import sys
-
-    _load_dotenv_from_cwd_if_present()
-
-    parser = argparse.ArgumentParser(prog="categorize-expenses")
-    parser.add_argument(
-        "--csv-path",
-        required=True,
-        help="Path to an AmEx-like CSV file to categorize",
-    )
-
-    # argparse calls sys.exit on error; convert that into an int return code so
-    # console-script wrappers can exit cleanly with that code.
-    try:
-        ns = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    except SystemExit as e:
-        return int(e.code) if isinstance(e.code, int) else 2
-
-    return cmd_categorize_expenses(ns.csv_path)
+    if ctx.invoked_subcommand is None:
+        if csv_path is None:
+            typer.echo("Error: Missing option '--csv-path'.", err=True)
+            raise typer.Exit(2)
+        exit_code = cmd_categorize_expenses(str(csv_path))
+        raise typer.Exit(exit_code)
