@@ -10,6 +10,10 @@ dependencies = [
     "sqlalchemy>=2.0.43",
 ]
 
+# Console scripts exposed via `uv run <script>`
+[project.scripts]
+categorize-expenses = "financial_analysis.cli:main_categorize_expenses"
+
 # Workspace-level dependency groups for tooling
 [dependency-groups]
 dev = [

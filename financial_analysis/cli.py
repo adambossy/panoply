@@ -274,3 +274,80 @@ def cmd_review_transaction_categories(
     """
 
     raise NotImplementedError
+
+
+# ---- Console entrypoint for `categorize-expenses` ----------------------------
+
+
+def _load_dotenv_from_cwd_if_present() -> None:
+    """Load OPENAI_API_KEY from a .env file in the current working directory.
+
+    This is a tiny, dependency-free loader to satisfy the requirement that the
+    command observes OPENAI_API_KEY provided via a repository-root `.env` even
+    when the execution environment doesn't auto-load it.
+
+    Behavior:
+    - Only sets environment variables that are not already present.
+    - Reads KEY=VALUE pairs; ignores blank lines and lines starting with `#`.
+    - Trims surrounding single or double quotes around the VALUE.
+    - Only affects the current process (no filesystem writes).
+    """
+
+    import os
+    from pathlib import Path
+
+    if "OPENAI_API_KEY" in os.environ:
+        return
+    env_path = Path.cwd() / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            key = k.strip()
+            if key != "OPENAI_API_KEY":
+                continue
+            val = v.strip()
+            if (val.startswith('"') and val.endswith('"')) or (
+                val.startswith("'") and val.endswith("'")
+            ):
+                val = val[1:-1]
+            if key not in os.environ:
+                os.environ[key] = val
+    except Exception:
+        # Silent best-effort; cmd handler will validate the env var and report errors.
+        return
+
+
+def main_categorize_expenses(argv: list[str] | None = None) -> int:
+    """Console entrypoint for `categorize-expenses`.
+
+    Parses `--csv-path` and delegates to :func:`cmd_categorize_expenses`.
+    Returns the integer exit code produced by the command handler.
+    """
+
+    import argparse
+    import sys
+
+    _load_dotenv_from_cwd_if_present()
+
+    parser = argparse.ArgumentParser(prog="categorize-expenses")
+    parser.add_argument(
+        "--csv-path",
+        required=True,
+        help="Path to an AmEx-like CSV file to categorize",
+    )
+
+    # argparse calls sys.exit on error; convert that into an int return code so
+    # console-script wrappers can exit cleanly with that code.
+    try:
+        ns = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit as e:
+        return int(e.code) if isinstance(e.code, int) else 2
+
+    return cmd_categorize_expenses(ns.csv_path)
