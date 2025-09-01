@@ -38,6 +38,11 @@ test = [
 # Install the dev tools group by default (it already includes `test`).
 default-groups = ["dev"]
 
+[tool.uv.scripts]
+# Allow running the CLI without installing the project as a distribution.
+# This makes `uv run categorize-expenses --csv-path …` work from the repo root.
+categorize-expenses = "python -m financial_analysis.cli"
+
 [tool.uv.workspace]
 # All packages and libraries in the workspace live under these directories.
 members = ["packages/*", "libs/*"]

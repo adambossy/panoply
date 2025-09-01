@@ -326,3 +326,8 @@ def _root(
 
     if ctx.invoked_subcommand is None:
         raise typer.Exit(cmd_categorize_expenses(str(csv_path)))
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script
+    # Running as a module: `python -m financial_analysis.cli`
+    app()
