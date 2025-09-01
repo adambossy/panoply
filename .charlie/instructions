@@ -1,0 +1,10 @@
+Repository policy for Charlie (plain text)
+
+CLI framework requirement
+- All new CLI entry points and any CLI refactors in this repository must use the Typer library. Commands should be exposed via a Typer app. Do not implement CLI parsing with argparse or custom parsers.
+
+Environment loading requirement
+- Load environment variables from a .env file using the python-dotenv package (e.g., load_dotenv). Do not use a custom dotenv loader. By default, the loader must not override environment variables that are already set.
+
+Scope
+- These are repository-specific conventions for Charlie to follow on future tasks.
