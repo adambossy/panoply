@@ -9,13 +9,18 @@ dependencies = [
   "python-dotenv>=1.0.1",
 ]
 
+# Console script for `uv run categorize-expenses`
+[project.scripts]
+categorize-expenses = "financial_analysis.cli:app"
+
 # This package exports the Python module "financial_analysis" (this directory).
-# The CLI console script is declared at the workspace root under [project.scripts].
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["financial_analysis*"]
+[tool.setuptools]
+packages = ["financial_analysis"]
+
+[tool.setuptools.package-dir]
+financial_analysis = "."
