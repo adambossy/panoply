@@ -7,10 +7,11 @@ from typing import Any
 import pytest
 
 
-# Make sure repository root is on sys.path so `financial_analysis` is importable
+# Make sure the workspace `packages/` dir is on sys.path so `financial_analysis` is importable
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_PKG_DIR = _ROOT / "packages"
+# Ensure `packages/` precedes the repo root on sys.path so local packages resolve first.
+sys.path[:0] = [p for p in [str(_PKG_DIR), str(_ROOT)] if p not in sys.path]
 
 # Public symbol under test
 from financial_analysis import api as api_mod  # noqa: E402

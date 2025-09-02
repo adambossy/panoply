@@ -5,6 +5,8 @@ version = "0.0.0"
 description = "Workspace root for the Panoply monorepo (uv workspace + shared dev tooling)."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    # Local workspace package providing the CLI and APIs (normalized name)
+    "financial-analysis",
     "alembic>=1.16.5",
     "openai>=1.102.0",
     "python-dotenv>=1.0.1",
@@ -38,10 +40,9 @@ test = [
 # Install the dev tools group by default (it already includes `test`).
 default-groups = ["dev"]
 
-[tool.uv.scripts]
-# Allow running the CLI without installing the project as a distribution.
-# This makes `uv run categorize-expenses --csv-path …` work from the repo root.
-categorize-expenses = "python -m financial_analysis.cli"
+[tool.uv.sources]
+# Resolve the local workspace package from the uv workspace (see [tool.uv.workspace]).
+financial-analysis = { workspace = true }
 
 [tool.uv.workspace]
 # All packages and libraries in the workspace live under these directories.
