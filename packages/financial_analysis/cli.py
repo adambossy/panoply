@@ -79,49 +79,51 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     import csv
     import os
     import sys
-    from collections.abc import Iterable
 
     # Local imports to keep CLI dependency surface minimal
     from .api import categorize_expenses
-    from .ingest.adapters.amex_like_csv import to_ctv
+    from .ingest.adapters.amex_enhanced_details_csv import (
+        to_ctv_enhanced_details,
+    )
+    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
     # Validate environment early so failures are clear
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
         return 1
 
-    # Attempt to open and parse the CSV
+    # Attempt to open and parse the CSV (supports AmEx Enhanced Details with
+    # preamble and the standard AmEx-like export with the header on the first
+    # row). Header validation is performed inside the adapter, which will raise
+    # ``csv.Error`` with an informative message when the header cannot be
+    # located or required columns are missing.
     try:
         with open(csv_path, encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-
-            # Verify required headers for the AmEx-like adapter
-            required_headers = {
-                "Reference",
-                "Description",
-                "Amount",
-                "Date",
-                "Appears On Your Statement As",
-                "Extended Details",
-            }
-            headers: Iterable[str] | None = reader.fieldnames
-            if headers is None:
-                print(
-                    f"Error: CSV appears to have no header row: {csv_path}",
-                    file=sys.stderr,
-                )
-                return 1
-            missing = sorted(h for h in required_headers if h not in headers)
-            if missing:
-                print(
-                    "Error: CSV header mismatch for AmEx-like adapter. Missing columns: "
-                    + ", ".join(missing),
-                    file=sys.stderr,
-                )
-                return 1
-
-            # Convert rows to CTV and realize as a list to preserve order
-            ctv_items = list(to_ctv(reader))
+            try:
+                # Prefer Enhanced Details adapter (handles preamble and exact header).
+                ctv_items = list(to_ctv_enhanced_details(f))
+            except csv.Error as err:
+                # Fallback: standard AmEx-like CSV where the header is on the first row.
+                f.seek(0)
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames
+                required_headers = {
+                    "Reference",
+                    "Description",
+                    "Amount",
+                    "Date",
+                    "Appears On Your Statement As",
+                    "Extended Details",
+                }
+                if headers is None:
+                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
+                missing = sorted(h for h in required_headers if h not in headers)
+                if missing:
+                    raise csv.Error(
+                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
+                        + ", ".join(missing)
+                    ) from err
+                ctv_items = list(to_ctv_standard(reader))
 
     except FileNotFoundError:
         print(f"Error: File not found: {csv_path}", file=sys.stderr)
