@@ -1,5 +1,6 @@
 # ruff: noqa: E402, I001
 import json
+import time
 import sys
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,77 @@ def _mk_transactions():
 
 def _mk_response_json(results: list[dict[str, Any]]) -> str:
     return json.dumps({"results": results})
+
+
+def _extract_ctv_from_user_content(user_content: str) -> list[dict[str, Any]]:
+    """Helper to parse the embedded CTV JSON array from the user content string."""
+    begin = "BEGIN_TRANSACTIONS_JSON\n"
+    end = "\nEND_TRANSACTIONS_JSON"
+    b = user_content.find(begin)
+    e = user_content.rfind(end)
+    assert b != -1 and e != -1 and e > b
+    ctv_json = user_content[b + len(begin) : e]
+    return json.loads(ctv_json)
+
+
+class _PagedOpenAIStub:
+    """A stubbed OpenAI client that returns page-sized results and tracks concurrency.
+
+    - Builds ``results`` based on the number of CTV items in the input user content.
+    - Records each call's kwargs into ``calls`` for later assertions.
+    - Tracks ``inflight`` and ``max_inflight`` across threads to observe concurrency.
+    - Optional ``sleep_per_call`` delays response to make concurrency measurable.
+    """
+
+    def __init__(self, calls: list[dict[str, Any]], sleep_per_call: float = 0.0):
+        import threading
+
+        self.calls = calls
+        self.sleep_per_call = sleep_per_call
+        self._lock = threading.Lock()
+        self.inflight = 0
+        self.max_inflight = 0
+
+        class _Responses:
+            def __init__(self, outer: "_PagedOpenAIStub") -> None:
+                self._outer = outer
+
+            def create(self, **kwargs):
+                # Concurrency tracking
+                with self._outer._lock:
+                    self._outer.inflight += 1
+                    if self._outer.inflight > self._outer.max_inflight:
+                        self._outer.max_inflight = self._outer.inflight
+
+                try:
+                    self._outer.calls.append(kwargs)
+                    user_content = kwargs["input"]
+                    items = _extract_ctv_from_user_content(user_content)
+
+                    # Simple synthetic categories (allowed)
+                    results = [
+                        {
+                            "idx": item["idx"],
+                            "id": item.get("id"),
+                            "category": "Other",
+                        }
+                        for item in items
+                    ]
+
+                    if self._outer.sleep_per_call > 0:
+                        time.sleep(self._outer.sleep_per_call)
+
+                    class _Resp:
+                        output_text: str
+
+                    resp = _Resp()
+                    resp.output_text = _mk_response_json(results)
+                    return resp
+                finally:
+                    with self._outer._lock:
+                        self._outer.inflight -= 1
+
+        self.responses = _Responses(self)
 
 
 # ---- Test cases ---------------------------------------------------------------
@@ -293,3 +365,105 @@ def test_empty_input_returns_empty_iterable(monkeypatch: pytest.MonkeyPatch):
 
     out = list(_categorize_expenses(transactions))
     assert out == []
+
+
+@pytest.mark.parametrize(
+    "n, expected_calls",
+    [
+        (0, 0),
+        (50, 1),
+        (100, 1),
+        (101, 2),
+        (200, 2),
+        (250, 3),
+        (1234, 13),  # 12x100 + 1x34
+    ],
+)
+def test_pagination_call_counts_and_sizes(
+    monkeypatch: pytest.MonkeyPatch, n: int, expected_calls: int
+):
+    # Build N synthetic transactions in input order; IDs are stable but unused by alignment.
+    txs = [
+        {
+            "id": f"tx{i}",
+            "description": f"desc {i}",
+            "amount": -1.0,
+            "date": "2025-09-01",
+            "merchant": "M",
+            "memo": None,
+        }
+        for i in range(n)
+    ]
+
+    calls: list[dict[str, Any]] = []
+    stub = _PagedOpenAIStub(calls)
+    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+
+    out = list(_categorize_expenses(txs))
+
+    # Count calls and verify page sizes never exceed the default (100)
+    assert len(calls) == expected_calls
+    for call in calls:
+        items = _extract_ctv_from_user_content(call["input"])
+        assert len(items) <= 100
+
+    # Output shape and order preserved
+    assert len(out) == n
+    for i, row in enumerate(out):
+        if n == 0:
+            break
+        assert row.transaction is txs[i]
+
+
+def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.MonkeyPatch):
+    n = 120
+    txs = [
+        {
+            "id": f"tx{i}",
+            "description": f"desc {i}",
+            "amount": -1.0,
+            "date": "2025-09-01",
+            "merchant": "M",
+            "memo": None,
+        }
+        for i in range(n)
+    ]
+
+    calls: list[dict[str, Any]] = []
+    stub = _PagedOpenAIStub(calls)
+    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+
+    # Override to a smaller page size; expect 3 calls (50, 50, 20)
+    out = list(_categorize_expenses(txs, page_size=50))
+    assert len(out) == n
+    assert len(calls) == 3
+    sizes = [len(_extract_ctv_from_user_content(c["input"])) for c in calls]
+    assert sizes[:2] == [50, 50]
+    assert sizes[2] == 20
+
+
+def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
+    # Choose N to produce many pages and add a small sleep per call to expose concurrency.
+    n = 1000  # 10 pages at default page size (100)
+    txs = [
+        {
+            "id": f"tx{i}",
+            "description": f"desc {i}",
+            "amount": -1.0,
+            "date": "2025-09-01",
+            "merchant": "M",
+            "memo": None,
+        }
+        for i in range(n)
+    ]
+
+    calls: list[dict[str, Any]] = []
+    stub = _PagedOpenAIStub(calls, sleep_per_call=0.05)
+    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+
+    out = list(_categorize_expenses(txs))
+    assert len(out) == n
+    # 10 pages → 10 calls
+    assert len(calls) == 10
+    # Observed in-flight maximum must not exceed the cap of 4
+    assert stub.max_inflight <= 4
