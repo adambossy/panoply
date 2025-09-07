@@ -1,0 +1,26 @@
+[project]
+name = "financial_analysis"
+version = "0.0.0"
+description = "Expense categorization utilities and CLI for Panoply."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "openai>=1.102.0",
+  "typer>=0.12.3",
+  "python-dotenv>=1.0.1",
+]
+
+# Console script for `uv run categorize-expenses`
+[project.scripts]
+categorize-expenses = "financial_analysis.cli:app"
+
+# This package exports the Python module "financial_analysis" (this directory).
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["financial_analysis"]
+
+[tool.setuptools.package-dir]
+financial_analysis = "."

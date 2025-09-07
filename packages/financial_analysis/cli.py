@@ -1,0 +1,335 @@
+"""CLI for the ``financial_analysis`` package.
+
+This module exposes callable command handlers (e.g.,
+``cmd_categorize_expenses``) and a Typer-based console interface. Environment
+variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
+``python-dotenv`` before delegating to command logic. Business logic lives in
+``financial_analysis.api`` and related modules.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from dotenv import load_dotenv
+from typer.models import OptionInfo
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for the ``financial_analysis`` CLI (stub).
+
+    Parameters
+    ----------
+    argv:
+        Command-line arguments, excluding the program name. When ``None``, the
+        eventual implementation would read from ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        Process exit code. ``0`` indicates success. The actual parsing and
+        dispatch to subcommands is not implemented here.
+
+    Subcommands
+    -----------
+    The CLI is expected to expose one subcommand per public API function:
+
+    - ``categorize-expenses <csv_path>``
+    - ``identify-refunds <csv_path>``
+    - ``partition-transactions <csv_path> [--years N] [--months N]``
+      ``[--weeks N] [--days N]``
+    - ``report-trends <csv_path>``
+    - ``review-transaction-categories <csv_path_with_categories>``
+
+    Notes
+    -----
+    - Output formats and destinations are not specified: whether results should
+      be printed to stdout, written to files, and in which format (CSV/JSON/
+      table) requires clarification.
+    - No argument-parsing library is chosen at this time.
+    """
+
+    raise NotImplementedError
+
+
+def cmd_categorize_expenses(csv_path: str) -> int:
+    """Categorize expenses from a CSV file and print results to stdout.
+
+    Behavior
+    --------
+    - Reads ``csv_path`` as an AmEx-like CSV export.
+    - Converts rows to Canonical Transaction View (CTV) using the existing
+      adapter at ``financial_analysis.ingest.adapters.amex_like_csv``.
+    - Invokes :func:`financial_analysis.api.categorize_expenses` with the CTV
+      sequence.
+    - Writes one line per transaction to stdout in input order, formatted as
+      ``"<id>\t<category>"`` where ``<id>`` is empty when not present.
+
+    Errors are written to stderr and the function returns a non‑zero exit
+    status. On success, returns ``0``.
+
+    Parameters
+    ----------
+    csv_path:
+        Filesystem path to the CSV file.
+    """
+
+    import csv
+    import os
+    import sys
+
+    # Local imports to keep CLI dependency surface minimal
+    from .api import categorize_expenses
+    from .ingest.adapters.amex_enhanced_details_csv import (
+        to_ctv_enhanced_details,
+    )
+    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+
+    # Validate environment early so failures are clear
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
+        return 1
+
+    # Attempt to open and parse the CSV (supports AmEx Enhanced Details with
+    # preamble and the standard AmEx-like export with the header on the first
+    # row). Header validation is performed inside the adapter, which will raise
+    # ``csv.Error`` with an informative message when the header cannot be
+    # located or required columns are missing.
+    try:
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            try:
+                # Prefer Enhanced Details adapter (handles preamble and exact header).
+                ctv_items = list(to_ctv_enhanced_details(f))
+            except csv.Error as err:
+                # Fallback: standard AmEx-like CSV where the header is on the first row.
+                f.seek(0)
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames
+                required_headers = {
+                    "Reference",
+                    "Description",
+                    "Amount",
+                    "Date",
+                    "Appears On Your Statement As",
+                    "Extended Details",
+                }
+                if headers is None:
+                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
+                missing = sorted(h for h in required_headers if h not in headers)
+                if missing:
+                    raise csv.Error(
+                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
+                        + ", ".join(missing)
+                    ) from err
+                ctv_items = list(to_ctv_standard(reader))
+
+    except FileNotFoundError:
+        print(f"Error: File not found: {csv_path}", file=sys.stderr)
+        return 1
+    except PermissionError:
+        print(f"Error: Permission denied: {csv_path}", file=sys.stderr)
+        return 1
+    except csv.Error as e:
+        print(f"Error: Failed to parse CSV: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
+        return 1
+
+    # Call the categorization API and print results
+    try:
+        results = list(categorize_expenses(ctv_items))
+    except Exception as e:
+        # Provide a concise message; the API validates inputs and may raise
+        # ValueError/TypeError for schema or OpenAI/network issues.
+        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        return 1
+
+    # Emit one line per transaction: "<id>\t<category>"
+    for row in results:
+        tx_id = row.transaction.get("id") if isinstance(row.transaction, dict) else None
+        print(f"{tx_id or ''}\t{row.category}")
+
+    return 0
+
+
+def cmd_identify_refunds(csv_path: str) -> int:
+    """CLI handler for ``identify-refunds <csv_path>`` (stub).
+
+    Parameters
+    ----------
+    csv_path:
+        Path to a CSV file containing transactions.
+
+    Returns
+    -------
+    int
+        Process exit code. The function is a stub and does not perform I/O.
+
+    Notes
+    -----
+    - Mirrors the :func:`financial_analysis.api.identify_refunds` feature.
+    - Refund matches are represented as pairs of full
+      :data:`~financial_analysis.models.TransactionRecord` objects (see
+      :class:`~financial_analysis.models.RefundMatch`), not row indices.
+    - The amount column name/format and any date schema or disambiguation rules
+      are unspecified and require clarification.
+    - Output format for CLI execution is not specified and requires
+      clarification.
+    """
+
+    raise NotImplementedError
+
+
+def cmd_partition_transactions(
+    csv_path: str,
+    *,
+    years: int | None = None,
+    months: int | None = None,
+    weeks: int | None = None,
+    days: int | None = None,
+) -> int:
+    """CLI handler for the ``partition-transactions`` subcommand (stub).
+
+    Usage
+    -----
+    ``partition-transactions <csv_path> [--years N] [--months N] [--weeks N] [--days N]``
+
+    Parameters
+    ----------
+    csv_path:
+        Path to a CSV file containing transactions.
+    years:
+        Optional integer number of years per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.years`.
+    months:
+        Optional integer number of months per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.months`.
+    weeks:
+        Optional integer number of weeks per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.weeks`.
+    days:
+        Optional integer number of days per partition; maps directly to
+        :class:`financial_analysis.models.PartitionPeriod.days`.
+
+    Any combination of these flags may be provided (e.g., ``--months 3 --weeks 2``).
+
+    Returns
+    -------
+    int
+        Process exit code. The function is a stub and does not perform I/O.
+
+    Notes
+    -----
+    - Mirrors the :func:`financial_analysis.api.partition_transactions` API.
+    - Required date column name/format and timezone/calendar assumptions are
+      unspecified and require clarification.
+    - Output format for CLI execution is not specified and requires
+      clarification.
+    """
+
+    raise NotImplementedError
+
+
+def cmd_report_trends(csv_path: str) -> int:
+    """CLI handler for ``report-trends <csv_path>`` (stub).
+
+    Parameters
+    ----------
+    csv_path:
+        Path to a CSV file containing transactions.
+
+    Returns
+    -------
+    int
+        Process exit code. The function is a stub and does not perform I/O.
+
+    Notes
+    -----
+    - Mirrors the :func:`financial_analysis.api.report_trends` API.
+    - Required column names (date, amount, category), output table layout,
+      and rendering destination are not specified and require clarification.
+    """
+
+    raise NotImplementedError
+
+
+def cmd_review_transaction_categories(
+    csv_path_with_categories: str,
+) -> int:
+    """CLI handler for ``review-transaction-categories <csv_path_with_categories>`` (stub).
+
+    Parameters
+    ----------
+    csv_path_with_categories:
+        Path to a CSV containing transactions that already include category
+        information.
+
+    Returns
+    -------
+    int
+        Process exit code. The function is a stub and does not perform I/O.
+
+    Notes
+    -----
+    - Mirrors the :func:`financial_analysis.api.review_transaction_categories` API.
+    - REPL interaction model (prompts, commands, confirmation flow), category
+      ontology, and any normalization rules are not specified and require
+      clarification.
+    - Output format for CLI execution is not specified and requires
+      clarification.
+    """
+
+    raise NotImplementedError
+
+
+# ---- Typer-based console interface -------------------------------------------
+
+
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    help=(
+        "Categorize expenses from an AmEx-like CSV using OpenAI (Responses API). "
+        "Loads OPENAI_API_KEY from a local .env before running."
+    ),
+)
+
+
+# Module-level option object to satisfy ruff B008 (no calls in parameter
+# defaults). Typer will inspect this when used as a default value below.
+CSV_PATH_OPTION: OptionInfo = typer.Option(
+    ...,  # required
+    "--csv-path",
+    help="Path to an AmEx-like CSV file to categorize",
+    dir_okay=False,
+    file_okay=True,
+    exists=False,  # allow non-existent here; the handler will report nice errors
+    readable=True,
+)
+
+
+@app.callback(invoke_without_command=True)
+def _root(
+    ctx: typer.Context,
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
+) -> None:
+    """Root command.
+
+    Loads ``.env`` from the current working directory (without overriding any
+    already-set environment variables) and delegates to
+    :func:`cmd_categorize_expenses` when no subcommand is invoked.
+    """
+
+    # Load environment from .env in CWD (override=False to keep existing env)
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+
+    if ctx.invoked_subcommand is None:
+        raise typer.Exit(cmd_categorize_expenses(str(csv_path)))
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script
+    # Running as a module: `python -m financial_analysis.cli`
+    app()
