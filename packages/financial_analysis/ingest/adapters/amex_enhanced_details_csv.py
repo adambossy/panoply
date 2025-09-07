@@ -41,9 +41,9 @@ from .amex_like_csv import to_ctv as _to_ctv_like
 
 # The exact header observed in user input (and required by this adapter)
 EXACT_HEADER = (
-    "Date, Description, Card Member, Account #, Amount, Extended Details, "
-    "Appears On Your Statement As, Address, City/State, Zip Code, Country, "
-    "Reference, Category"
+    "Date,Description,Card Member,Account #,Amount,Extended Details,"
+    "Appears On Your Statement As,Address,City/State,Zip Code,Country,"
+    "Reference,Category"
 )
 
 
