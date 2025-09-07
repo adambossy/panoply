@@ -1,3 +1,13 @@
-"""Placeholder package for shared SQLAlchemy models or metadata registry."""
+"""Shared SQLAlchemy models registry for the workspace database.
 
-__all__: list[str] = []
+Currently includes finance domain models used by ``financial_analysis``.
+"""
+
+from .finance import Base, FaCategory, FaRefundPair, FaTransaction
+
+__all__ = [
+    "Base",
+    "FaCategory",
+    "FaTransaction",
+    "FaRefundPair",
+]

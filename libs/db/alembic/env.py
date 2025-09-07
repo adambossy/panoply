@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 """
 Alembic configuration for the `db` library.
 
@@ -9,6 +10,7 @@ at runtime and supports both offline and online migrations. Replace
 from __future__ import annotations
 
 import os
+import logging
 from logging.config import fileConfig
 
 from alembic import context
@@ -36,8 +38,24 @@ config.set_main_option("sqlalchemy.url", db_url)
 # Also set the option on the INI section so `engine_from_config` sees it.
 config.set_section_option(config.config_ini_section, "sqlalchemy.url", db_url)
 
-# Replace with your application's metadata when models are added.
-target_metadata = None
+# Import target metadata from the shared db package so Alembic can autogenerate
+# based on ORM models. This requires libs/db/src to be importable (uv workspace
+# handles that for local runs).
+logger = logging.getLogger("alembic.env")
+
+try:  # pragma: no cover - import side effects only
+    import db as _db_pkg
+
+    target_metadata = getattr(_db_pkg, "metadata", None)
+except Exception as exc:  # pragma: no cover - defensive fallback
+    # As a defensive fallback, keep target_metadata=None so Alembic can still
+    # run purely SQL migrations. This shouldn't happen in normal operation.
+    logger.warning(
+        "Could not import db.metadata for autogenerate; falling back to None. "
+        "Autogenerate may be incomplete. Error: %s",
+        exc,
+    )
+    target_metadata = None
 
 
 def run_migrations_offline() -> None:
