@@ -86,7 +86,7 @@ def upgrade() -> None:
         sa.Column("source_account", sa.Text(), nullable=True),
         sa.Column("external_id", sa.Text(), nullable=True),
         sa.Column("fingerprint_sha256", sa.CHAR(64), nullable=False, unique=True),
-        # Store raw transaction as generic JSON (not Postgres-specific JSONB)
+        # Store raw transaction as generic JSON
         sa.Column("raw_record", sa.JSON(), nullable=False),
         sa.Column(
             "currency_code",
