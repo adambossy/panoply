@@ -400,7 +400,7 @@ def categorize_expenses(
             )
             # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
             try:
-                pool.shutdown(cancel_futures=True)
+                pool.shutdown(wait=False, cancel_futures=True)
             except Exception:  # pragma: no cover - defensive
                 pass
             raise
