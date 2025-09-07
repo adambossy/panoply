@@ -24,7 +24,7 @@ from financial_analysis.categorization import ALLOWED_CATEGORIES  # noqa: E402
 
 
 def _make_openai_stub(response_obj: Any, calls_out: list[dict[str, Any]]):
-    """Return a minimal stub class to monkeypatch ``financial_analysis.api.OpenAI``.
+    """Return a minimal stub class to monkeypatch ``financial_analysis.categorize.OpenAI``.
 
     The stub captures calls to ``responses.create(...)`` and returns the
     provided ``response_obj``. ``calls_out`` will be appended with each
