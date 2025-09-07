@@ -15,6 +15,7 @@ from .api import (
     report_trends,
     review_transaction_categories,
 )
+from .ctv import CanonicalTransaction
 from .models import (
     CategorizedTransaction,
     PartitionPeriod,
@@ -23,6 +24,7 @@ from .models import (
     TransactionRecord,
     Transactions,
 )
+from .normalizers import CSVNormalizer
 
 __all__ = [
     # API
@@ -38,4 +40,7 @@ __all__ = [
     "PartitionPeriod",
     "Transactions",
     "TransactionPartitions",
+    # CTV + Normalization
+    "CanonicalTransaction",
+    "CSVNormalizer",
 ]
