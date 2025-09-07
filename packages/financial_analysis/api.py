@@ -51,18 +51,18 @@ _MAX_ATTEMPTS_PER_PAGE: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
 _JITTER_PCT: float = 0.20
 
-_LOGGER = logging.getLogger("financial_analysis.categorize")
+logger = logging.getLogger("financial_analysis.categorize")
 
 # Configure logging if not already configured
-if not _LOGGER.handlers:
+if not logger.handlers:
     # Set up a simple console handler for this logger
     handler = logging.StreamHandler()
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
-    _LOGGER.addHandler(handler)
-    _LOGGER.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
     # Prevent propagation to avoid duplicate logs
-    _LOGGER.propagate = False
+    logger.propagate = False
 
 
 def _extract_response_json_mapping(resp: Any) -> Mapping[str, Any]:
@@ -126,7 +126,7 @@ def categorize_expenses(
       order, where ``transaction`` is the original mapping object, unmodified.
     """
 
-    _LOGGER.info("categorize_expenses:function_start page_size=%d", page_size)
+    logger.info("categorize_expenses:function_start page_size=%d", page_size)
 
     # Coerce input to a concrete sequence to preserve order and allow indexing.
     original_seq_any = list(transactions)
@@ -164,7 +164,7 @@ def categorize_expenses(
         raise ValueError("page_size must be a positive integer")
     pages_total = math.ceil(n_total / page_size)
 
-    _LOGGER.info(
+    logger.info(
         "categorize_expenses:start pages_total=%d total_items=%d page_size=%d concurrency=%d",
         pages_total,
         n_total,
@@ -200,7 +200,7 @@ def categorize_expenses(
 
     def _process_page(page_index: int, base: int, end: int) -> tuple[int, int, list[str]]:
         count = end - base
-        _LOGGER.info(
+        logger.info(
             "categorize_expenses:page_start page_index=%d base=%d end=%d count=%d",
             page_index,
             base,
@@ -225,7 +225,7 @@ def categorize_expenses(
         ctv_json = prompting.serialize_ctv_to_json(ctv_page)
         user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
 
-        _LOGGER.debug(
+        logger.debug(
             "categorize_expenses:page_prepared page_index=%d ctv_count=%d content_length=%d",
             page_index,
             len(ctv_page),
@@ -236,7 +236,7 @@ def categorize_expenses(
         while True:
             t0 = time.perf_counter()
             try:
-                _LOGGER.info(
+                logger.info(
                     (
                         "categorize_expenses:page_attempt page_index=%d base=%d count=%d "
                         "attempt=%d max=%d"
@@ -258,7 +258,7 @@ def categorize_expenses(
                 decoded = _extract_response_json_mapping(resp)
                 page_categories = parse_and_align_categories(decoded, num_items=count)
                 dt_ms = (time.perf_counter() - t0) * 1000.0
-                _LOGGER.info(
+                logger.info(
                     (
                         "categorize_expenses:page_success page_index=%d base=%d count=%d "
                         "latency_ms=%.2f retries_used=%d"
@@ -269,7 +269,7 @@ def categorize_expenses(
                     dt_ms,
                     attempt - 1,
                 )
-                _LOGGER.info(
+                logger.info(
                     "categorize_expenses:page_complete page_index=%d categories_returned=%d",
                     page_index,
                     len(page_categories),
@@ -278,7 +278,7 @@ def categorize_expenses(
             except Exception as e:  # noqa: BLE001
                 dt_ms = (time.perf_counter() - t0) * 1000.0
                 if attempt >= _MAX_ATTEMPTS_PER_PAGE or not _is_retryable(e):
-                    _LOGGER.error(
+                    logger.error(
                         (
                             "categorize_expenses:page_failed_terminal page_index=%d base=%d "
                             "count=%d latency_ms=%.2f error=%s"
@@ -297,7 +297,7 @@ def categorize_expenses(
                         f"categorize_expenses failed for page {page_index} "
                         f"(base={base}, count={count}): {e}"
                     ) from e
-                _LOGGER.warning(
+                logger.warning(
                     (
                         "categorize_expenses:page_retry page_index=%d base=%d count=%d "
                         "latency_ms=%.2f error=%s attempt=%d"
@@ -314,7 +314,7 @@ def categorize_expenses(
 
     # Submit all pages to a bounded pool and aggregate as they complete.
     futures: list[Any] = []
-    _LOGGER.info(
+    logger.info(
         "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
         pages_total,
         CONCURRENCY_CATEGORIZE,
@@ -328,7 +328,7 @@ def categorize_expenses(
                 end = min(base + page_size, n_total)
                 future = pool.submit(_process_page, k, base, end)
                 futures.append(future)
-                _LOGGER.debug(
+                logger.debug(
                     "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
                     k,
                     base,
@@ -336,7 +336,7 @@ def categorize_expenses(
                     id(future),
                 )
 
-            _LOGGER.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
+            logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
 
             # Process completed futures
             completed_count = 0
@@ -346,7 +346,7 @@ def categorize_expenses(
                 completed_count += 1
                 elapsed_time = time.perf_counter() - start_time
 
-                _LOGGER.info(
+                logger.info(
                     "categorize_expenses:future_completed completed=%d/%d elapsed_sec=%.2f "
                     "future_id=%s",
                     completed_count,
@@ -357,7 +357,7 @@ def categorize_expenses(
 
                 try:
                     page_index, base, page_categories = fut.result()
-                    _LOGGER.debug(
+                    logger.debug(
                         "categorize_expenses:processing_result page_index=%d base=%d "
                         "categories_count=%d",
                         page_index,
@@ -369,7 +369,7 @@ def categorize_expenses(
                         categories_by_abs_idx[base + i] = cat
 
                 except Exception as e:
-                    _LOGGER.error(
+                    logger.error(
                         "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
                         id(fut),
                         str(e),
@@ -378,10 +378,10 @@ def categorize_expenses(
                     raise
 
             total_time = time.perf_counter() - start_time
-            _LOGGER.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
+            logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
 
         except Exception as e:
-            _LOGGER.error(
+            logger.error(
                 "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
                 str(e),
                 e.__class__.__name__,
@@ -395,15 +395,15 @@ def categorize_expenses(
                     if not f.done():
                         f.cancel()
                         cancelled_count += 1
-                        _LOGGER.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
+                        logger.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
                 except Exception as cancel_e:
-                    _LOGGER.warning(
+                    logger.warning(
                         "categorize_expenses:cancel_failed future_id=%s error=%s",
                         id(f),
                         str(cancel_e),
                     )
 
-            _LOGGER.info(
+            logger.info(
                 "categorize_expenses:cancellation_complete cancelled_count=%d", cancelled_count
             )
             raise
