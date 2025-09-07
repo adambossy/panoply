@@ -77,7 +77,8 @@ def configure_logging(
             logger.removeHandler(h)
 
     handler = logging.StreamHandler(stream)
-    handler.setLevel(_parse_level(level))
+    # Keep handler at NOTSET; the logger's level acts as the effective threshold.
+    handler.setLevel(logging.NOTSET)
     formatter = logging.Formatter(fmt or "%(asctime)s %(name)s %(levelname)s %(message)s")
     handler.setFormatter(formatter)
 

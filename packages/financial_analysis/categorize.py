@@ -15,7 +15,7 @@ import math
 import random
 import time
 from collections.abc import Iterable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any, cast
 
 from openai import OpenAI
@@ -75,13 +75,14 @@ def _extract_response_json_mapping(resp: Any) -> Mapping[str, Any]:
 
 
 def _validate_and_materialize(transactions: Transactions) -> list[Mapping[str, Any]]:
-    original_seq_any = list(transactions)
-    if not all(isinstance(item, Mapping) for item in original_seq_any):
+    # Materialize exactly once; validate and reuse the same list.
+    _materialized = list(transactions)
+    if not all(isinstance(item, Mapping) for item in _materialized):
         raise TypeError(
             "categorize_expenses expects each transaction to be a mapping (CTV) with keys "
             "like 'id', 'description', 'amount', 'date', 'merchant', 'memo'."
         )
-    original_seq: list[Mapping[str, Any]] = list(original_seq_any)
+    original_seq: list[Mapping[str, Any]] = _materialized
 
     # Validate descriptions early (fail-fast)
     to_validate: list[dict[str, Any]] = []
@@ -181,6 +182,8 @@ def _categorize_page(
         len(user_content),
     )
 
+    # Instantiate the client once per page and reuse across retries.
+    client = _create_client()
     attempt = 1
     while True:
         t0 = time.perf_counter()
@@ -196,7 +199,6 @@ def _categorize_page(
                 attempt,
                 _MAX_ATTEMPTS,
             )
-            client = _create_client()
             resp = client.responses.create(
                 model="gpt-5",
                 instructions=system_instructions,
@@ -299,7 +301,7 @@ def categorize_expenses(
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
-    futures: list[Any] = []
+    futures: list[Future[tuple[int, int, list[str]]]] = []
     _logger.info(
         "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
         pages_total,
@@ -396,6 +398,11 @@ def categorize_expenses(
                 "categorize_expenses:cancellation_complete cancelled_count=%d",
                 cancelled_count,
             )
+            # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
+            try:
+                pool.shutdown(cancel_futures=True)
+            except Exception:  # pragma: no cover - defensive
+                pass
             raise
 
     missing = [i for i, v in enumerate(categories_by_abs_idx) if v is None]
