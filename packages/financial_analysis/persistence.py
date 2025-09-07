@@ -5,7 +5,7 @@ Functions here write transactions and category updates to the shared database
 owned by ``libs/db``. They rely on SQLAlchemy ORM models defined in
 ``db.models.finance`` and a session provided by ``db.client``.
 
-Scope (per Issue #15):
+Scope:
 - Upsert transactions into ``fa_transactions`` (raw JSONB + canonical columns).
 - Update category fields for categorized transactions.
 - Provide a stub to persist refund pairs for future use.
