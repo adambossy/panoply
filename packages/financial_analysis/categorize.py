@@ -308,102 +308,113 @@ def categorize_expenses(
         _CONCURRENCY,
     )
 
-    with ThreadPoolExecutor(max_workers=_CONCURRENCY) as pool:
-        try:
-            for page_index, base, end in _paginate(n_total, page_size):
-                fut = pool.submit(
-                    _categorize_page,
-                    page_index,
-                    base=base,
-                    end=end,
-                    original_seq=original_seq,
-                    system_instructions=system_instructions,
-                    text_cfg=text_cfg,
-                )
-                futures.append(fut)
+    # Manage the executor explicitly to ensure non-blocking shutdown on failure.
+    pool = ThreadPoolExecutor(max_workers=_CONCURRENCY)
+    _shutdown_called = False
+    try:
+        for page_index, base, end in _paginate(n_total, page_size):
+            fut = pool.submit(
+                _categorize_page,
+                page_index,
+                base=base,
+                end=end,
+                original_seq=original_seq,
+                system_instructions=system_instructions,
+                text_cfg=text_cfg,
+            )
+            futures.append(fut)
+            _logger.debug(
+                "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
+                page_index,
+                base,
+                end,
+                id(fut),
+            )
+
+        _logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
+
+        completed_count = 0
+        start_time = time.perf_counter()
+
+        for fut in as_completed(futures):
+            completed_count += 1
+            elapsed_time = time.perf_counter() - start_time
+            _logger.info(
+                (
+                    "categorize_expenses:future_completed completed=%d/%d "
+                    "elapsed_sec=%.2f future_id=%s"
+                ),
+                completed_count,
+                len(futures),
+                elapsed_time,
+                id(fut),
+            )
+
+            try:
+                page_index, base, page_categories = fut.result()
                 _logger.debug(
-                    "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
+                    (
+                        "categorize_expenses:processing_result page_index=%d "
+                        "base=%d categories_count=%d"
+                    ),
                     page_index,
                     base,
-                    end,
-                    id(fut),
+                    len(page_categories),
                 )
-
-            _logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
-
-            completed_count = 0
-            start_time = time.perf_counter()
-
-            for fut in as_completed(futures):
-                completed_count += 1
-                elapsed_time = time.perf_counter() - start_time
-                _logger.info(
-                    (
-                        "categorize_expenses:future_completed completed=%d/%d "
-                        "elapsed_sec=%.2f future_id=%s"
-                    ),
-                    completed_count,
-                    len(futures),
-                    elapsed_time,
+                for i, cat in enumerate(page_categories):
+                    categories_by_abs_idx[base + i] = cat
+            except Exception as e:
+                _logger.error(
+                    "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
                     id(fut),
+                    str(e),
+                    e.__class__.__name__,
                 )
+                raise
 
-                try:
-                    page_index, base, page_categories = fut.result()
-                    _logger.debug(
-                        (
-                            "categorize_expenses:processing_result page_index=%d "
-                            "base=%d categories_count=%d"
-                        ),
-                        page_index,
-                        base,
-                        len(page_categories),
-                    )
-                    for i, cat in enumerate(page_categories):
-                        categories_by_abs_idx[base + i] = cat
-                except Exception as e:
-                    _logger.error(
-                        "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
-                        id(fut),
-                        str(e),
-                        e.__class__.__name__,
-                    )
-                    raise
+        total_time = time.perf_counter() - start_time
+        _logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
 
-            total_time = time.perf_counter() - start_time
-            _logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
+    except Exception as e:
+        _logger.error(
+            "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
+            str(e),
+            e.__class__.__name__,
+            len(futures),
+        )
 
-        except Exception as e:
-            _logger.error(
-                "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
-                str(e),
-                e.__class__.__name__,
-                len(futures),
-            )
-
-            cancelled_count = 0
-            for f in futures:
-                try:
-                    if not f.done():
-                        f.cancel()
-                        cancelled_count += 1
-                        _logger.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
-                except Exception as cancel_e:  # pragma: no cover - defensive
-                    _logger.warning(
-                        "categorize_expenses:cancel_failed future_id=%s error=%s",
-                        id(f),
-                        str(cancel_e),
-                    )
-            _logger.info(
-                "categorize_expenses:cancellation_complete cancelled_count=%d",
-                cancelled_count,
-            )
-            # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
+        cancelled_count = 0
+        for f in futures:
             try:
-                pool.shutdown(wait=False, cancel_futures=True)
+                if not f.done():
+                    f.cancel()
+                    cancelled_count += 1
+                    _logger.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
+            except Exception as cancel_e:  # pragma: no cover - defensive
+                _logger.warning(
+                    "categorize_expenses:cancel_failed future_id=%s error=%s",
+                    id(f),
+                    str(cancel_e),
+                )
+        _logger.info(
+            "categorize_expenses:cancellation_complete cancelled_count=%d",
+            cancelled_count,
+        )
+        # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+            _shutdown_called = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+        raise
+    finally:
+        # Ensure the executor is shut down in all cases.
+        if not _shutdown_called:
+            try:
+                # Clean shutdown after successful completion or on BaseException paths.
+                pool.shutdown(wait=True)
             except Exception:  # pragma: no cover - defensive
                 pass
-            raise
 
     missing = [i for i, v in enumerate(categories_by_abs_idx) if v is None]
     if missing:  # pragma: no cover - defensive
