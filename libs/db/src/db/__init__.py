@@ -9,7 +9,7 @@ Public exports
 
 from __future__ import annotations
 
-from .models.finance import Base, FaCategory, FaRefundPair, FaTransaction
+from .models.finance import Base, FaCategory, FaTransaction
 
 # Re-export SQLAlchemy metadata for Alembic's env.py
 metadata = Base.metadata
@@ -19,5 +19,4 @@ __all__ = [
     "metadata",
     "FaCategory",
     "FaTransaction",
-    "FaRefundPair",
 ]

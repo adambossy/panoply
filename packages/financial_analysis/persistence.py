@@ -8,7 +8,7 @@ owned by ``libs/db``. They rely on SQLAlchemy ORM models defined in
 Scope:
 - Upsert transactions into ``fa_transactions`` (raw JSONB + canonical columns).
 - Update category fields for categorized transactions.
-- Provide a stub to persist refund pairs for future use.
+  (Refund pairing is out of scope for this PR.)
 """
 
 from __future__ import annotations  # ruff: noqa: I001
@@ -16,7 +16,7 @@ from __future__ import annotations  # ruff: noqa: I001
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from typing import Any
 
@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from db.models.finance import FaTransaction
-from .models import CategorizedTransaction, RefundMatch
+from .models import CategorizedTransaction
 
 
 def _to_decimal_2(raw: Any) -> Decimal | None:
@@ -72,11 +72,12 @@ def compute_fingerprint(
     merchant (trimmed), description (trimmed).
     """
 
+    _d = _to_date(tx.get("date"))
     payload = {
         "provider": (source_provider or "").strip().lower(),
         "id": _norm_str(tx.get("id")),
         "amount": None,
-        "date": _norm_str(tx.get("date")),
+        "date": _d.isoformat() if _d else None,
         "merchant": _norm_str(tx.get("merchant")),
         "description": _norm_str(tx.get("description")),
     }
@@ -106,6 +107,9 @@ def upsert_transactions(
 
     now = func.now()
 
+    payloads_with_eid: list[dict[str, Any]] = []
+    payloads_without_eid: list[dict[str, Any]] = []
+
     for tx in transactions:
         external_id = _norm_str(tx.get("id"))
         amount_d = _to_decimal_2(tx.get("amount"))
@@ -129,43 +133,45 @@ def upsert_transactions(
             "memo": memo,
             "updated_at": now,
         }
-
-        stmt = pg_insert(FaTransaction).values(**insert_values)
-
         if external_id is not None:
-            # Upsert on natural key when external_id is present (partial unique index)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[FaTransaction.source_provider, FaTransaction.external_id],
-                index_where=FaTransaction.external_id.isnot(None),
-                set_={
-                    # Preserve category fields; update canonical columns and raw JSON only
-                    "raw_record": stmt.excluded.raw_record,
-                    "currency_code": stmt.excluded.currency_code,
-                    "amount": stmt.excluded.amount,
-                    "date": stmt.excluded.date,
-                    "description": stmt.excluded.description,
-                    "merchant": stmt.excluded.merchant,
-                    "memo": stmt.excluded.memo,
-                    "fingerprint_sha256": stmt.excluded.fingerprint_sha256,
-                    "updated_at": now,
-                },
-            )
+            payloads_with_eid.append(insert_values)
         else:
-            # Upsert on fingerprint fallback when no external id exists
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[FaTransaction.fingerprint_sha256],
-                set_={
-                    "raw_record": stmt.excluded.raw_record,
-                    "currency_code": stmt.excluded.currency_code,
-                    "amount": stmt.excluded.amount,
-                    "date": stmt.excluded.date,
-                    "description": stmt.excluded.description,
-                    "merchant": stmt.excluded.merchant,
-                    "memo": stmt.excluded.memo,
-                    "updated_at": now,
-                },
-            )
+            payloads_without_eid.append(insert_values)
 
+    if payloads_with_eid:
+        stmt = pg_insert(FaTransaction).values(payloads_with_eid)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[FaTransaction.source_provider, FaTransaction.external_id],
+            index_where=FaTransaction.external_id.isnot(None),
+            set_={
+                "raw_record": stmt.excluded.raw_record,
+                "currency_code": stmt.excluded.currency_code,
+                "amount": stmt.excluded.amount,
+                "date": stmt.excluded.date,
+                "description": stmt.excluded.description,
+                "merchant": stmt.excluded.merchant,
+                "memo": stmt.excluded.memo,
+                "fingerprint_sha256": stmt.excluded.fingerprint_sha256,
+                "updated_at": now,
+            },
+        )
+        session.execute(stmt)
+
+    if payloads_without_eid:
+        stmt = pg_insert(FaTransaction).values(payloads_without_eid)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[FaTransaction.fingerprint_sha256],
+            set_={
+                "raw_record": stmt.excluded.raw_record,
+                "currency_code": stmt.excluded.currency_code,
+                "amount": stmt.excluded.amount,
+                "date": stmt.excluded.date,
+                "description": stmt.excluded.description,
+                "merchant": stmt.excluded.merchant,
+                "memo": stmt.excluded.memo,
+                "updated_at": now,
+            },
+        )
         session.execute(stmt)
 
 
@@ -182,7 +188,7 @@ def apply_category_updates(
     Matching strategy mirrors :func:`upsert_transactions`.
     """
 
-    now = datetime.utcnow()
+    now = func.now()
 
     for item in categorized:
         tx = item.transaction
@@ -201,6 +207,7 @@ def apply_category_updates(
                     category_source=category_source,
                     category_confidence=category_confidence,
                     categorized_at=now,
+                    updated_at=now,
                 )
             )
             session.execute(stmt)
@@ -214,30 +221,14 @@ def apply_category_updates(
                     category_source=category_source,
                     category_confidence=category_confidence,
                     categorized_at=now,
+                    updated_at=now,
                 )
             )
             session.execute(stmt)
-
-
-def persist_refund_pairs(
-    session: Session, *, pairs: Iterable[RefundMatch]
-) -> None:  # pragma: no cover - not wired yet
-    """Persist refund links into ``fa_refund_pairs`` (stub).
-
-    This function will be invoked by future ``identify_refunds`` integration.
-    It assumes both sides of the pair already exist in ``fa_transactions`` and
-    will insert unique pairs by (expense_id, refund_id).
-    """
-
-    # This is intentionally left as a minimal stub. Implementers should look up
-    # the transaction IDs (by external_id or fingerprint) and insert via a
-    # unique-on pair upsert.
-    return None
 
 
 __all__ = [
     "compute_fingerprint",
     "upsert_transactions",
     "apply_category_updates",
-    "persist_refund_pairs",
 ]

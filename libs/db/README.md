@@ -48,6 +48,7 @@ The following tables are owned by this library and are created by Alembic migrat
   - `description text null`
   - `merchant text null`
   - `memo text null`
+  - `verified boolean not null default false`
   - `category text null references fa_categories(code) deferrable initially deferred`
   - `category_source text not null default 'unknown'` with `CHECK (category_source in ('llm','manual','rule','import','unknown'))`
   - `category_confidence numeric(3,2) null` with `CHECK (category_confidence >= 0 and category_confidence <= 1)`
@@ -58,17 +59,9 @@ The following tables are owned by this library and are created by Alembic migrat
 
   Indexes and uniques:
   - Partial unique index on `(source_provider, external_id)` where `external_id` is not null (`uniq_fa_tx_provider_external_id`)
-  - Unique index on `(fingerprint_sha256)` (`uq_fa_tx_fingerprint`)
+  - Column-level unique on `fingerprint_sha256`
   - B-tree index on `(date)` (`ix_fa_transactions_date`)
   - B-tree index on `(category)` (`ix_fa_transactions_category`)
   - B-tree index on `(merchant)` (`ix_fa_transactions_merchant`)
-
-- `fa_refund_pairs`
-  - `id bigint primary key generated always as identity`
-  - `expense_id bigint not null references fa_transactions(id) on delete cascade`
-  - `refund_id bigint not null references fa_transactions(id) on delete cascade`
-  - `CHECK (expense_id <> refund_id)`
-  - `UNIQUE (expense_id, refund_id)`
-  - `created_at timestamptz not null default now()`
 
 Categories are seeded from `financial_analysis.categorization.ALLOWED_CATEGORIES` at migration time.

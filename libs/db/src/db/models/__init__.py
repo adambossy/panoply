@@ -3,11 +3,10 @@
 Currently includes finance domain models used by ``financial_analysis``.
 """
 
-from .finance import Base, FaCategory, FaRefundPair, FaTransaction
+from .finance import Base, FaCategory, FaTransaction
 
 __all__ = [
     "Base",
     "FaCategory",
     "FaTransaction",
-    "FaRefundPair",
 ]

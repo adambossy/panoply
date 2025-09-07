@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     CHAR,
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -52,7 +54,7 @@ class FaCategory(Base):
 class FaTransaction(Base):
     __tablename__ = "fa_transactions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source_provider: Mapped[str] = mapped_column(String, nullable=False)
     source_account: Mapped[str | None] = mapped_column(String, nullable=True)
     external_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -61,11 +63,12 @@ class FaTransaction(Base):
     currency_code: Mapped[str] = mapped_column(
         CHAR(3), nullable=False, server_default=text("'USD'")
     )
-    amount: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     date: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     merchant: Mapped[str | None] = mapped_column(Text, nullable=True)
     memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     category: Mapped[str | None] = mapped_column(
         String,
         ForeignKey("fa_categories.code", deferrable=True, initially="DEFERRED"),
@@ -99,35 +102,8 @@ class FaTransaction(Base):
             name="ck_fa_tx_category_confidence",
         ),
     )
-
-
-# ---------------------------
-# Link: fa_refund_pairs
-# ---------------------------
-
-
-class FaRefundPair(Base):
-    __tablename__ = "fa_refund_pairs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    expense_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("fa_transactions.id", ondelete="CASCADE"), nullable=False
-    )
-    refund_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("fa_transactions.id", ondelete="CASCADE"), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
-    )
-
-    __table_args__ = (
-        CheckConstraint("expense_id <> refund_id", name="ck_fa_refund_pairs_distinct"),
-    )
-
-
 __all__ = [
     "Base",
     "FaCategory",
     "FaTransaction",
-    "FaRefundPair",
 ]

@@ -37,7 +37,7 @@ def get_engine(*, database_url: str | None = None) -> Engine:
     url = _database_url(database_url)
     if _ENGINE is None:
         # Default isolation level is fine; echo disabled.
-        engine = create_engine(url, pool_pre_ping=True, future=True)
+        engine = create_engine(url, pool_pre_ping=True)
         _SESSION_MAKER = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
         _ENGINE = engine
         global _DB_URL

@@ -99,6 +99,12 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("merchant", sa.Text(), nullable=True),
         sa.Column("memo", sa.Text(), nullable=True),
+        sa.Column(
+            "verified",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
         sa.Column("category", sa.Text(), nullable=True),
         sa.Column(
             "category_source",
@@ -149,12 +155,6 @@ def upgrade() -> None:
 
     # Indexes and uniques
     op.create_index(
-        "uq_fa_tx_fingerprint",
-        "fa_transactions",
-        ["fingerprint_sha256"],
-        unique=True,
-    )
-    op.create_index(
         "uniq_fa_tx_provider_external_id",
         "fa_transactions",
         ["source_provider", "external_id"],
@@ -171,6 +171,5 @@ def downgrade() -> None:
     op.drop_index("ix_fa_transactions_category", table_name="fa_transactions")
     op.drop_index("ix_fa_transactions_date", table_name="fa_transactions")
     op.drop_index("uniq_fa_tx_provider_external_id", table_name="fa_transactions")
-    op.drop_index("uq_fa_tx_fingerprint", table_name="fa_transactions")
     op.drop_table("fa_transactions")
     op.drop_table("fa_categories")
