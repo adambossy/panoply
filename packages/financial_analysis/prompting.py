@@ -70,6 +70,7 @@ def build_user_content(ctv_json: str, *, allowed_categories: Iterable[str] | Non
         "- Default to 'Other' only when none of the listed categories apply.\n"
         "- Keep input order. Use the provided idx field to align responses.\n"
         "- Respond with JSON only, following the specified schema. No extra text.\n\n"
+        "- Categorize every transaction in your output. DON'T DROP ANY TRANSACTIONS.\n"
         "Transactions JSON (UTF-8). Begin after the next line with "
         "BEGIN_TRANSACTIONS_JSON and end at END_TRANSACTIONS_JSON:\n"
         "BEGIN_TRANSACTIONS_JSON\n"
