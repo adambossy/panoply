@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from io import StringIO
@@ -123,11 +122,10 @@ def _read_csv_rows(csv_text: str) -> list[dict[str, str]]:
         # and punctuation). DictReader already does this.
         rows: list[dict[str, str]] = []
         for row in reader:
-            # DictReader returns None for missing columns; coerce to '' for
-            # simplicity.
-            normalized = {
-                (k if k is not None else ""): (v if v is not None else "") for k, v in row.items()
-            }
+            # DictReader may include a None key aggregating extra columns.
+            # Filter out None keys entirely to preserve the declared
+            # ``dict[str, str]`` shape and avoid leaking list values.
+            normalized = {k: (v if v is not None else "") for k, v in row.items() if k is not None}
             rows.append(normalized)
         return rows
 
@@ -135,12 +133,6 @@ def _read_csv_rows(csv_text: str) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Provider-specific normalizers
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class NormalizationInput:
-    provider: str
-    csv_text: str
 
 
 class CSVNormalizer:
@@ -373,7 +365,8 @@ def _normalize_amazon_orders(rows: list[dict[str, str]]) -> Iterator[CanonicalTr
             if parts:
                 first_item = parts[0]
                 if len(parts) > 1:
-                    first_item = f"{first_item}; +{len(parts) - 1} more"
+                    # Append "+N more" without an extra semicolon, per docs.
+                    first_item = f"{first_item} +{len(parts) - 1} more"
 
         description = first_item or None
         merchant = "Amazon.com"
@@ -474,4 +467,4 @@ def _normalize_venmo(rows: list[dict[str, str]]) -> Iterator[CanonicalTransactio
         idx += 1
 
 
-__all__ = ["CSVNormalizer", "NormalizationInput"]
+__all__ = ["CSVNormalizer"]
