@@ -79,7 +79,7 @@ class FaTransaction(Base):
         nullable=False,
         server_default=text("'unknown'"),
     )
-    category_confidence: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
+    category_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     categorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(

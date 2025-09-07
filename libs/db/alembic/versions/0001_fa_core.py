@@ -12,7 +12,6 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -87,7 +86,8 @@ def upgrade() -> None:
         sa.Column("source_account", sa.Text(), nullable=True),
         sa.Column("external_id", sa.Text(), nullable=True),
         sa.Column("fingerprint_sha256", sa.CHAR(64), nullable=False, unique=True),
-        sa.Column("raw_record", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        # Store raw transaction as generic JSON (not Postgres-specific JSONB)
+        sa.Column("raw_record", sa.JSON(), nullable=False),
         sa.Column(
             "currency_code",
             sa.CHAR(3),

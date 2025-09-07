@@ -374,17 +374,12 @@ def categorize_expenses_cmd(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Compute categories first (network-bound) to keep DB transactions short.
-    try:
-        results = list(categorize_expenses(ctv_items))
-    except Exception as e:
-        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
-        return 1
-
+    # When persisting, write transactions first in a short transaction to avoid
+    # losing ingestion if categorization fails later.
     if persist:
         try:
             from db.client import session_scope
-            from .persistence import apply_category_updates, upsert_transactions
+            from .persistence import upsert_transactions
 
             with session_scope(database_url=database_url) as session:
                 upsert_transactions(
@@ -393,6 +388,24 @@ def categorize_expenses_cmd(
                     source_account=source_account,
                     transactions=ctv_items,
                 )
+        except Exception as e:
+            print(f"Error: persistence (upsert) failed: {e}", file=sys.stderr)
+            return 1
+
+    # Compute categories (network-bound) outside of any DB transaction.
+    try:
+        results = list(categorize_expenses(ctv_items))
+    except Exception as e:
+        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        return 1
+
+    # Apply category updates in a second short transaction when persisting.
+    if persist:
+        try:
+            from db.client import session_scope
+            from .persistence import apply_category_updates
+
+            with session_scope(database_url=database_url) as session:
                 apply_category_updates(
                     session,
                     source_provider=source_provider,
@@ -401,7 +414,7 @@ def categorize_expenses_cmd(
                     category_confidence=None,
                 )
         except Exception as e:
-            print(f"Error: persistence failed: {e}", file=sys.stderr)
+            print(f"Error: persistence (category updates) failed: {e}", file=sys.stderr)
             return 1
 
     # Print results as "<id>\t<category>" per existing contract
