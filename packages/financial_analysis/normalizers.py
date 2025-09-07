@@ -32,33 +32,41 @@ def _to_decimal(raw: str | None) -> Decimal:
     s = raw.strip()
     if not s:
         raise ValueError("amount is empty")
-    # Remove currency symbols and thousands separators; keep sign and dot.
-    # Also handle common variants like "+ $1,234.56" or "($1,234.56)".
+    # Normalize sign/parentheses independently so combinations like
+    # "-($1,234.56)" are handled robustly.
     negative = False
-    if s.startswith("+"):
-        s = s[1:].lstrip()
-    if s.startswith("($") or s.startswith("($ "):
-        negative = True
-        s = s.strip("()$").replace(",", "").strip()
-    else:
-        # strip leading sign to inspect parentheses later
-        if s.startswith("-"):
+
+    # Iteratively strip leading sign, currency symbol, and surrounding
+    # parentheses until stable. This supports any ordering of these markers.
+    while True:
+        changed = False
+        if s.startswith("+"):
+            s = s[1:].lstrip()
+            changed = True
+        elif s.startswith("-"):
             negative = True
             s = s[1:].lstrip()
-        # Remove currency symbol and spaces between sign and symbol
+            changed = True
+        # Remove currency symbol early so cases like "$(1,234.56)" work
         if s.startswith("$"):
-            s = s[1:]
-        s = s.replace(",", "").strip()
-        # Parentheses without $ (rare)
-        if s.startswith("(") and s.endswith(")"):
+            s = s[1:].lstrip()
+            changed = True
+        # Surrounding parentheses indicate negativity regardless of sign.
+        if s.startswith("(") and s.endswith(")") and len(s) >= 2:
             negative = True
-            s = s.strip("()")
+            s = s[1:-1].strip()
+            changed = True
+        if not changed:
+            break
+
+    # Strip thousands separators; keep decimal point.
+    s = s.replace(",", "").strip()
 
     try:
         d = Decimal(s)
     except InvalidOperation as exc:
         raise ValueError(f"invalid amount: {raw!r}") from exc
-    return -d if negative and d >= 0 else d
+    return -abs(d) if negative else d
 
 
 def _fmt_amount(d: Decimal) -> str:
@@ -91,8 +99,9 @@ def _iso_datetime_date(date_time: str | None) -> str | None:
     s = date_time.strip()
     if not s:
         return None
-    # Accept 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS' variants
-    return s.split("T", 1)[0]
+    # Accept 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM:SS', and 'YYYY-MM-DD HH:MM:SS'.
+    first = s.split()[0]
+    return first.split("T", 1)[0]
 
 
 def _first_non_empty(values: Sequence[str | None]) -> str | None:
@@ -202,9 +211,6 @@ def _normalize_amex(rows: list[dict[str, str]]) -> Iterator[CanonicalTransaction
         if appears_as and desc_short and appears_as != desc_short:
             memo_parts.append(f"Description={desc_short}")
             memo_parts.append(f"AppearsAs={appears_as}")
-        # Optionally duplicate Category in memo (acceptable per spec)
-        if category:
-            memo_parts.append(f"Category={category}")
 
         yield CanonicalTransaction(
             idx=idx,
