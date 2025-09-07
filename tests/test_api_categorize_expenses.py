@@ -15,8 +15,8 @@ _PKG_DIR = _ROOT / "packages"
 sys.path[:0] = [p for p in [str(_PKG_DIR), str(_ROOT)] if p not in sys.path]
 
 # Public symbol under test
-from financial_analysis import api as api_mod  # noqa: E402
-from financial_analysis.api import categorize_expenses as _categorize_expenses  # noqa: E402
+import financial_analysis.categorize as categorize_mod  # noqa: E402
+from financial_analysis.categorize import categorize_expenses as _categorize_expenses  # noqa: E402
 from financial_analysis.categorization import ALLOWED_CATEGORIES  # noqa: E402
 
 
@@ -46,7 +46,7 @@ def _make_openai_stub(response_obj: Any, calls_out: list[dict[str, Any]]):
 def _run_with_stubbed_openai(monkeypatch: pytest.MonkeyPatch, response_obj: Any):
     calls: list[dict[str, Any]] = []
     OpenAIStub = _make_openai_stub(response_obj, calls)
-    monkeypatch.setattr(api_mod, "OpenAI", OpenAIStub)
+    monkeypatch.setattr(categorize_mod, "OpenAI", OpenAIStub)
     return calls
 
 
@@ -397,7 +397,7 @@ def test_pagination_call_counts_and_sizes(
 
     calls: list[dict[str, Any]] = []
     stub = _PagedOpenAIStub(calls)
-    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+    monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
     out = list(_categorize_expenses(txs))
 
@@ -431,7 +431,7 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
 
     calls: list[dict[str, Any]] = []
     stub = _PagedOpenAIStub(calls)
-    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+    monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
     # Override to a smaller page size; expect 3 calls (50, 50, 20)
     out = list(_categorize_expenses(txs, page_size=50))
@@ -459,7 +459,7 @@ def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
 
     calls: list[dict[str, Any]] = []
     stub = _PagedOpenAIStub(calls, sleep_per_call=0.05)
-    monkeypatch.setattr(api_mod, "OpenAI", lambda: stub)
+    monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
     out = list(_categorize_expenses(txs))
     assert len(out) == n

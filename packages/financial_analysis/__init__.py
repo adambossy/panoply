@@ -9,12 +9,12 @@ intentionally out of scope for this iteration.
 """
 
 from .api import (
-    categorize_expenses,
     identify_refunds,
     partition_transactions,
     report_trends,
     review_transaction_categories,
 )
+from .categorize import categorize_expenses
 from .ctv import CanonicalTransaction
 from .models import (
     CategorizedTransaction,

@@ -16,6 +16,8 @@ import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
 
+from .logging_setup import configure_logging
+
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``financial_analysis`` CLI (stub).
@@ -81,7 +83,7 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     import sys
 
     # Local imports to keep CLI dependency surface minimal
-    from .api import categorize_expenses
+    from .categorize import categorize_expenses
     from .ingest.adapters.amex_enhanced_details_csv import (
         to_ctv_enhanced_details,
     )
@@ -325,6 +327,9 @@ def _root(
 
     # Load environment from .env in CWD (override=False to keep existing env)
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+
+    # Central logging setup so child loggers inherit configuration
+    configure_logging()
 
     if ctx.invoked_subcommand is None:
         raise typer.Exit(cmd_categorize_expenses(str(csv_path)))
