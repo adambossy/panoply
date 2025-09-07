@@ -8,7 +8,6 @@ owned by ``libs/db``. They rely on SQLAlchemy ORM models defined in
 Scope:
 - Upsert transactions into ``fa_transactions`` (raw JSONB + canonical columns).
 - Update category fields for categorized transactions.
-  (Refund pairing is out of scope for this PR.)
 """
 
 from __future__ import annotations  # ruff: noqa: I001
