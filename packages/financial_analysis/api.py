@@ -53,6 +53,17 @@ _JITTER_PCT: float = 0.20
 
 _LOGGER = logging.getLogger("financial_analysis.categorize")
 
+# Configure logging if not already configured
+if not _LOGGER.handlers:
+    # Set up a simple console handler for this logger
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    _LOGGER.addHandler(handler)
+    _LOGGER.setLevel(logging.INFO)
+    # Prevent propagation to avoid duplicate logs
+    _LOGGER.propagate = False
+
 
 def _extract_response_json_mapping(resp: Any) -> Mapping[str, Any]:
     """Return the decoded JSON mapping from an OpenAI Responses SDK result.
@@ -114,6 +125,8 @@ def categorize_expenses(
     - Returns an iterable of :class:`CategorizedTransaction` in the exact input
       order, where ``transaction`` is the original mapping object, unmodified.
     """
+
+    _LOGGER.info("categorize_expenses:function_start page_size=%d", page_size)
 
     # Coerce input to a concrete sequence to preserve order and allow indexing.
     original_seq_any = list(transactions)
@@ -187,6 +200,14 @@ def categorize_expenses(
 
     def _process_page(page_index: int, base: int, end: int) -> tuple[int, int, list[str]]:
         count = end - base
+        _LOGGER.info(
+            "categorize_expenses:page_start page_index=%d base=%d end=%d count=%d",
+            page_index,
+            base,
+            end,
+            count,
+        )
+
         # Build page-local CTV list with idx 0..count-1 in current order.
         ctv_page: list[dict[str, Any]] = []
         for local_idx, record in enumerate(original_seq[base:end]):
@@ -203,6 +224,13 @@ def categorize_expenses(
             )
         ctv_json = prompting.serialize_ctv_to_json(ctv_page)
         user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
+
+        _LOGGER.debug(
+            "categorize_expenses:page_prepared page_index=%d ctv_count=%d content_length=%d",
+            page_index,
+            len(ctv_page),
+            len(user_content),
+        )
 
         attempt = 1
         while True:
@@ -240,6 +268,11 @@ def categorize_expenses(
                     count,
                     dt_ms,
                     attempt - 1,
+                )
+                _LOGGER.info(
+                    "categorize_expenses:page_complete page_index=%d categories_returned=%d",
+                    page_index,
+                    len(page_categories),
                 )
                 return (page_index, base, page_categories)
             except Exception as e:  # noqa: BLE001
@@ -281,23 +314,98 @@ def categorize_expenses(
 
     # Submit all pages to a bounded pool and aggregate as they complete.
     futures: list[Any] = []
+    _LOGGER.info(
+        "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
+        pages_total,
+        CONCURRENCY_CATEGORIZE,
+    )
+
     with ThreadPoolExecutor(max_workers=CONCURRENCY_CATEGORIZE) as pool:
         try:
+            # Submit all page processing tasks
             for k in range(pages_total):
                 base = k * page_size
                 end = min(base + page_size, n_total)
-                futures.append(pool.submit(_process_page, k, base, end))
+                future = pool.submit(_process_page, k, base, end)
+                futures.append(future)
+                _LOGGER.debug(
+                    "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
+                    k,
+                    base,
+                    end,
+                    id(future),
+                )
+
+            _LOGGER.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
+
+            # Process completed futures
+            completed_count = 0
+            start_time = time.perf_counter()
 
             for fut in as_completed(futures):
-                page_index, base, page_categories = fut.result()
-                for i, cat in enumerate(page_categories):
-                    categories_by_abs_idx[base + i] = cat
-        except Exception:
+                completed_count += 1
+                elapsed_time = time.perf_counter() - start_time
+
+                _LOGGER.info(
+                    "categorize_expenses:future_completed completed=%d/%d elapsed_sec=%.2f "
+                    "future_id=%s",
+                    completed_count,
+                    len(futures),
+                    elapsed_time,
+                    id(fut),
+                )
+
+                try:
+                    page_index, base, page_categories = fut.result()
+                    _LOGGER.debug(
+                        "categorize_expenses:processing_result page_index=%d base=%d "
+                        "categories_count=%d",
+                        page_index,
+                        base,
+                        len(page_categories),
+                    )
+
+                    for i, cat in enumerate(page_categories):
+                        categories_by_abs_idx[base + i] = cat
+
+                except Exception as e:
+                    _LOGGER.error(
+                        "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
+                        id(fut),
+                        str(e),
+                        e.__class__.__name__,
+                    )
+                    raise
+
+            total_time = time.perf_counter() - start_time
+            _LOGGER.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
+
+        except Exception as e:
+            _LOGGER.error(
+                "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
+                str(e),
+                e.__class__.__name__,
+                len(futures),
+            )
+
+            # Cancel any remaining futures
+            cancelled_count = 0
             for f in futures:
                 try:
-                    f.cancel()
-                except Exception:
-                    pass
+                    if not f.done():
+                        f.cancel()
+                        cancelled_count += 1
+                        _LOGGER.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
+                except Exception as cancel_e:
+                    _LOGGER.warning(
+                        "categorize_expenses:cancel_failed future_id=%s error=%s",
+                        id(f),
+                        str(cancel_e),
+                    )
+
+            _LOGGER.info(
+                "categorize_expenses:cancellation_complete cancelled_count=%d", cancelled_count
+            )
             raise
 
     # Defensive check.
