@@ -1,7 +1,22 @@
 """db: shared database library (SQLAlchemy/Alembic/Supabase).
 
-This package currently exposes placeholders only. Implementation will be added in subsequent tasks.
+Public exports
+--------------
+- ``Base`` and ``metadata`` for Alembic autogenerate/targeting
+- ORM models in ``db.models.finance`` (re-exported for convenience)
+- Engine/session helpers in ``db.client``
 """
 
-# Public re-exports will be added as the package grows.
-__all__: list[str] = []
+from __future__ import annotations
+
+from .models.finance import Base, FaCategory, FaTransaction
+
+# Re-export SQLAlchemy metadata for Alembic's env.py
+metadata = Base.metadata
+
+__all__ = [
+    "Base",
+    "metadata",
+    "FaCategory",
+    "FaTransaction",
+]
