@@ -102,6 +102,8 @@ class FaTransaction(Base):
             name="ck_fa_tx_category_confidence",
         ),
     )
+
+
 __all__ = [
     "Base",
     "FaCategory",
