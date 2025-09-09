@@ -59,9 +59,14 @@ def _extract_response_json_mapping(resp: Any) -> Mapping[str, Any]:
             first = resp.output[0] if getattr(resp, "output", None) else None
             content = getattr(first, "content", None)
             if content and len(content) > 0:
-                maybe_text = getattr(content[0], "text", None)
-                if isinstance(maybe_text, str):
-                    text = maybe_text
+                txt_obj = getattr(content[0], "text", None)
+                if isinstance(txt_obj, str):
+                    text = txt_obj
+                else:
+                    # Some SDKs expose text as an object with a ``value`` string.
+                    maybe_val = getattr(txt_obj, "value", None)
+                    if isinstance(maybe_val, str):
+                        text = maybe_val
         except Exception:  # noqa: BLE001 - tolerate SDK shape differences
             text = None
     if not text or not isinstance(text, str):
@@ -383,23 +388,6 @@ def categorize_expenses(
             len(futures),
         )
 
-        cancelled_count = 0
-        for f in futures:
-            try:
-                if not f.done():
-                    f.cancel()
-                    cancelled_count += 1
-                    _logger.debug("categorize_expenses:cancelled_future future_id=%s", id(f))
-            except Exception as cancel_e:  # pragma: no cover - defensive
-                _logger.warning(
-                    "categorize_expenses:cancel_failed future_id=%s error=%s",
-                    id(f),
-                    str(cancel_e),
-                )
-        _logger.info(
-            "categorize_expenses:cancellation_complete cancelled_count=%d",
-            cancelled_count,
-        )
         # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
         try:
             pool.shutdown(wait=False, cancel_futures=True)

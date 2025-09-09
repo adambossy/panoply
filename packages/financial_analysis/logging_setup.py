@@ -19,10 +19,12 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from typing import IO
 
 _PKG_LOGGER_NAME = "financial_analysis"
 _CONFIGURED = False
+_CONFIG_LOCK = threading.Lock()
 
 
 def _parse_level(level: int | str | None) -> int:
@@ -68,26 +70,31 @@ def configure_logging(
     global _CONFIGURED
     if _CONFIGURED:
         return
+    # Synchronize configuration to avoid duplicate handlers when called
+    # concurrently from multiple threads.
+    with _CONFIG_LOCK:
+        if _CONFIGURED:
+            return
 
-    logger = logging.getLogger(_PKG_LOGGER_NAME)
+        logger = logging.getLogger(_PKG_LOGGER_NAME)
 
-    # Remove any existing NullHandlers to avoid swallowing logs after config.
-    for h in list(logger.handlers):
-        if isinstance(h, logging.NullHandler):
-            logger.removeHandler(h)
+        # Remove any existing NullHandlers to avoid swallowing logs after config.
+        for h in list(logger.handlers):
+            if isinstance(h, logging.NullHandler):
+                logger.removeHandler(h)
 
-    handler = logging.StreamHandler(stream)
-    # Keep handler at NOTSET; the logger's level acts as the effective threshold.
-    handler.setLevel(logging.NOTSET)
-    formatter = logging.Formatter(fmt or "%(asctime)s %(name)s %(levelname)s %(message)s")
-    handler.setFormatter(formatter)
+        handler = logging.StreamHandler(stream)
+        # Keep handler at NOTSET; the logger's level acts as the effective threshold.
+        handler.setLevel(logging.NOTSET)
+        formatter = logging.Formatter(fmt or "%(asctime)s %(name)s %(levelname)s %(message)s")
+        handler.setFormatter(formatter)
 
-    logger.setLevel(_parse_level(level))
-    logger.addHandler(handler)
-    # Avoid double emission via the root logger.
-    logger.propagate = False
+        logger.setLevel(_parse_level(level))
+        logger.addHandler(handler)
+        # Avoid double emission via the root logger.
+        logger.propagate = False
 
-    _CONFIGURED = True
+        _CONFIGURED = True
 
 
 def get_logger(name: str) -> logging.Logger:
