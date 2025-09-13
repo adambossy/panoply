@@ -285,7 +285,8 @@ def cmd_review_transaction_categories(
     import os
     import sys
 
-    from .api import categorize_expenses, review_transaction_categories
+    from .api import categorize_expenses
+    from .review import review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
