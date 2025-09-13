@@ -8,8 +8,9 @@ preparation, grouping, querying, prompting, and persistence.
 
 from __future__ import annotations
 
+import builtins
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,8 +20,6 @@ from sqlalchemy import func, select, update
 
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
-
-# ---- Data preparation --------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +61,6 @@ def _materialize_and_prepare(
     return items, prepared
 
 
-# ---- Grouping (union–find) --------------------------------------------------
 
 
 class _DisjointSet:
@@ -110,7 +108,6 @@ def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
     return groups_map
 
 
-# ---- DB helpers --------------------------------------------------------------
 
 
 def _load_allowed_categories(session) -> set[str]:
@@ -187,7 +184,6 @@ def _persist_group(
         session.execute(base.where(FaTransaction.fingerprint_sha256.in_(fps)).values(**values))
 
 
-# ---- Presentation and selection ---------------------------------------------
 
 
 def _fmt_tx_row(tx: Mapping[str, Any]) -> str:
@@ -199,14 +195,16 @@ def _fmt_tx_row(tx: Mapping[str, Any]) -> str:
     return f"{d or ''}\t{amt!s}\t{str(desc)[:60]}\t{eid or ''}"
 
 
-def _print_rows_block(title: str, rows: list[str], *, exemplars: int) -> None:
-    print(title)
+def _print_rows_block(
+    title: str, rows: list[str], *, exemplars: int, print_fn: Callable[..., None]
+) -> None:
+    print_fn(title)
     show = rows[:exemplars]
     for line in show:
-        print("  ", line)
+        print_fn("  ", line)
     extra = len(rows) - len(show)
     if extra > 0:
-        print(f"  +{extra} more")
+        print_fn(f"  +{extra} more")
 
 
 def _select_default_category(
@@ -221,10 +219,6 @@ def _select_default_category(
     most_common = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
     return most_common[0]
 
-
-# ---- Public API --------------------------------------------------------------
-
-
 def review_transaction_categories(
     transactions_with_categories: Iterable[CategorizedTransaction],
     *,
@@ -232,6 +226,8 @@ def review_transaction_categories(
     source_account: str | None,
     database_url: str | None = None,
     exemplars: int = 5,
+    input_fn: Callable[[str], str] = builtins.input,
+    print_fn: Callable[..., None] = builtins.print,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
@@ -254,6 +250,13 @@ def review_transaction_categories(
       ``verified=true``, and timestamps (batched updates by identifier type);
       commit after each group.
 
+    Parameters
+    ----------
+    input_fn:
+        Function used to prompt for user input. Defaults to ``builtins.input``.
+    print_fn:
+        Function used to print output. Defaults to ``builtins.print``.
+
     Returns
     -------
     list[CategorizedTransaction]
@@ -265,7 +268,7 @@ def review_transaction_categories(
         transactions_with_categories, source_provider=source_provider
     )
     if not items:
-        print("No transactions to review.")
+        print_fn("No transactions to review.")
         return []
 
     groups_map = _build_groups(prepared)
@@ -286,7 +289,10 @@ def review_transaction_categories(
             # Show input summary
             input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
             _print_rows_block(
-                "Input group (date\tamount\tdesc/merchant\tid):", input_rows, exemplars=exemplars
+                "Input group (date\tamount\tdesc/merchant\tid):",
+                input_rows,
+                exemplars=exemplars,
+                print_fn=print_fn,
             )
 
             # Query duplicates for this group
@@ -309,23 +315,24 @@ def review_transaction_categories(
                     "DB duplicates (first matches shown):",
                     dup_rows,
                     exemplars=exemplars,
+                    print_fn=print_fn,
                 )
             else:
-                print("No DB duplicates matched for this group.")
+                print_fn("No DB duplicates matched for this group.")
 
             chosen_default = _select_default_category(db_dupes, group_items)
-            print(f"Proposed category: {chosen_default}")
+            print_fn(f"Proposed category: {chosen_default}")
 
             # Prompt until a valid category is provided
             while True:
-                resp = input(
+                resp = input_fn(
                     "Press Enter to accept, or type a different category code: "
                 ).strip()
                 final_cat = chosen_default if not resp else resp
                 assert final_cat is not None
                 if final_cat in allowed:
                     break
-                print("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
+                print_fn("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
 
             _persist_group(
                 session,
@@ -342,7 +349,7 @@ def review_transaction_categories(
                 )
 
             session.commit()
-            print("Saved.")
+            print_fn("Saved.")
 
     return final
 

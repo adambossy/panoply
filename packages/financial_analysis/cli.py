@@ -285,8 +285,7 @@ def cmd_review_transaction_categories(
     import os
     import sys
 
-    from .api import categorize_expenses
-    from .review import review_transaction_categories
+    from .api import categorize_expenses, review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
@@ -294,31 +293,31 @@ def cmd_review_transaction_categories(
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
         return 1
 
-    # Load CSV → CTV
+    # Load CSV → CTV (header-driven adapter selection)
     try:
         with open(csv_path, encoding="utf-8", newline="") as f:
-            try:
-                ctv_items = list(to_ctv_enhanced_details(f))
-            except csv.Error as err:
+            reader = csv.DictReader(f)
+            headers_set = set(reader.fieldnames or [])
+            if not headers_set:
+                raise csv.Error(f"CSV appears to have no header row: {csv_path}")
+            if "Extended Details" in headers_set:
+                # Enhanced Details export has a preamble; let the adapter locate the real header.
                 f.seek(0)
-                reader = csv.DictReader(f)
-                headers = reader.fieldnames
+                ctv_items = list(to_ctv_enhanced_details(f))
+            else:
                 required_headers = {
                     "Reference",
                     "Description",
                     "Amount",
                     "Date",
                     "Appears On Your Statement As",
-                    "Extended Details",
                 }
-                if headers is None:
-                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
-                missing = sorted(h for h in required_headers if h not in headers)
+                missing = sorted(h for h in required_headers if h not in headers_set)
                 if missing:
                     raise csv.Error(
                         "CSV header mismatch for AmEx-like adapter. Missing columns: "
                         + ", ".join(missing)
-                    ) from err
+                    )
                 ctv_items = list(to_ctv_standard(reader))
     except FileNotFoundError:
         print(f"Error: File not found: {csv_path}", file=sys.stderr)
