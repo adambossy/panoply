@@ -1,5 +1,3 @@
-Repository policy for Charlie (plain text)
-
 CLI framework requirement
 - All new CLI entry points and any CLI refactors in this repository must use the Typer library. Commands should be exposed via a Typer app. Do not implement CLI parsing with argparse or custom parsers.
 
@@ -8,3 +6,9 @@ Environment loading requirement
 
 Scope
 - These are repository-specific conventions for Charlie to follow on future tasks.
+
+Code quality
+- Try to avoid long functions. Try to keep functions relatively decomposed with descriptive function names.
+
+Style
+- Don't use banner comments.
