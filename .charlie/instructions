@@ -9,6 +9,8 @@ Scope
 
 Code quality
 - Try to avoid long functions. Try to keep functions relatively decomposed with descriptive function names.
+- Avoid using nested function. If you define a function that needs a lot of nested functions, separate them into their own module.
+- Don't import modules inside of functions. Only keep imports at the module's top level.
 
 Style
 - Don't use banner comments.
