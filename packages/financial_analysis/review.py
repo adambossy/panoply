@@ -235,7 +235,29 @@ def review_transaction_categories(
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
-    See PR #21 description (Sept 13, 2025) for the expected behavior.
+    Behavior
+    --------
+    - Group input transactions into duplicate groups where two items are in the
+      same group if they share the same external id (``transaction['id']``) OR
+      the same fingerprint (``compute_fingerprint``). Fingerprinting uses the
+      provided ``source_provider`` as context.
+    - For each group, query DB duplicates in ``fa_transactions`` matching the
+      same ``(source_provider, source_account)`` and either any group external
+      id or any group fingerprint.
+    - Display a compact summary (first ``exemplars`` items, "+K more" for the
+      remainder) for both the input group and any DB duplicates.
+    - Prompt the operator to accept a default category (DB duplicates’
+      unanimous category when present; otherwise the most‑common LLM suggestion
+      in the group) or override with any valid ``fa_categories.code``.
+    - On confirmation, persist the whole group: upsert all transactions, then
+      set ``category=<chosen>``, ``category_source='manual'``,
+      ``verified=true``, and timestamps (batched updates by identifier type);
+      commit after each group.
+
+    Returns
+    -------
+    list[CategorizedTransaction]
+        Finalized list reflecting the chosen category per input item.
     """
 
     # Materialize and precompute identifiers
