@@ -261,32 +261,97 @@ def cmd_report_trends(csv_path: str) -> int:
 
 
 def cmd_review_transaction_categories(
-    csv_path_with_categories: str,
+    csv_path: str,
+    *,
+    database_url: str | None = None,
+    source_provider: str = "amex",
+    source_account: str | None = None,
 ) -> int:
-    """CLI handler for ``review-transaction-categories <csv_path_with_categories>`` (stub).
+    """Categorize a CSV, review groups interactively, and persist decisions.
 
-    Parameters
-    ----------
-    csv_path_with_categories:
-        Path to a CSV containing transactions that already include category
-        information.
-
-    Returns
-    -------
-    int
-        Process exit code. The function is a stub and does not perform I/O.
-
-    Notes
-    -----
-    - Mirrors the :func:`financial_analysis.api.review_transaction_categories` API.
-    - REPL interaction model (prompts, commands, confirmation flow), category
-      ontology, and any normalization rules are not specified and require
-      clarification.
-    - Output format for CLI execution is not specified and requires
-      clarification.
+    Flow
+    ----
+    - Load and normalize ``csv_path`` into CTV using the same adapters as
+      :func:`categorize_expenses_cmd`.
+    - Call :func:`financial_analysis.api.categorize_expenses` to obtain initial
+      category suggestions.
+    - Invoke :func:`financial_analysis.api.review_transaction_categories` with
+      ``source_provider``/``source_account`` and ``database_url`` so the user can
+      confirm/override categories per duplicate group and persist them
+      (``category_source='manual'``, ``verified=true``).
     """
 
-    raise NotImplementedError
+    import csv
+    import os
+    import sys
+
+    from .api import categorize_expenses, review_transaction_categories
+    from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
+    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
+        return 1
+
+    # Load CSV → CTV
+    try:
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            try:
+                ctv_items = list(to_ctv_enhanced_details(f))
+            except csv.Error as err:
+                f.seek(0)
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames
+                required_headers = {
+                    "Reference",
+                    "Description",
+                    "Amount",
+                    "Date",
+                    "Appears On Your Statement As",
+                    "Extended Details",
+                }
+                if headers is None:
+                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
+                missing = sorted(h for h in required_headers if h not in headers)
+                if missing:
+                    raise csv.Error(
+                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
+                        + ", ".join(missing)
+                    ) from err
+                ctv_items = list(to_ctv_standard(reader))
+    except FileNotFoundError:
+        print(f"Error: File not found: {csv_path}", file=sys.stderr)
+        return 1
+    except PermissionError:
+        print(f"Error: Permission denied: {csv_path}", file=sys.stderr)
+        return 1
+    except csv.Error as e:
+        print(f"Error: Failed to parse CSV: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
+        return 1
+
+    # Categorize to get suggestions
+    try:
+        suggestions = list(categorize_expenses(ctv_items))
+    except Exception as e:
+        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        return 1
+
+    # Run the interactive review+persist loop
+    try:
+        review_transaction_categories(
+            suggestions,
+            source_provider=source_provider,
+            source_account=source_account,
+            database_url=database_url,
+        )
+    except Exception as e:
+        print(f"Error: review failed: {e}", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 # ---- Typer-based console interface -------------------------------------------
@@ -425,6 +490,30 @@ def categorize_expenses_cmd(
         print(f"{tx_id or ''}\t{row.category}")
 
     return 0
+
+
+@app.command("review-transaction-categories")
+def review_transaction_categories_cmd(
+    csv_path: Path,
+    *,
+    database_url: str | None = typer.Option(
+        None, help="Override DATABASE_URL (falls back to env var)."
+    ),
+    source_provider: str = typer.Option(
+        "amex",
+        help="Source provider identifier for persistence (e.g., amex, chase, venmo).",
+    ),
+    source_account: str | None = typer.Option(
+        None, help="Optional source account identifier for persistence."
+    ),
+) -> int:
+    load_dotenv()
+    return cmd_review_transaction_categories(
+        str(csv_path),
+        database_url=database_url,
+        source_provider=source_provider,
+        source_account=source_account,
+    )
 
 
 # Module-level option object to satisfy ruff B008 (no calls in parameter
