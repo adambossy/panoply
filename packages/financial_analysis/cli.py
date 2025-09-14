@@ -293,18 +293,19 @@ def cmd_review_transaction_categories(
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
         return 1
 
-    # Load CSV → CTV (header-driven adapter selection)
+    # Load CSV → CTV (robust detection: scan small prefix for Enhanced Details token)
     try:
         with open(csv_path, encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            headers_set = set(reader.fieldnames or [])
-            if not headers_set:
-                raise csv.Error(f"CSV appears to have no header row: {csv_path}")
-            if "Extended Details" in headers_set:
-                # Enhanced Details export has a preamble; let the adapter locate the real header.
-                f.seek(0)
+            head = f.read(8192)
+            f.seek(0)
+            if "Extended Details" in head:
+                # Enhanced Details export (may include a preamble before the header)
                 ctv_items = list(to_ctv_enhanced_details(f))
             else:
+                reader = csv.DictReader(f)
+                headers_set = set(reader.fieldnames or [])
+                if not headers_set:
+                    raise csv.Error(f"CSV appears to have no header row: {csv_path}")
                 required_headers = {
                     "Reference",
                     "Description",

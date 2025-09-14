@@ -16,7 +16,7 @@ from typing import Any
 
 from db.client import session_scope
 from db.models.finance import FaCategory, FaTransaction
-from sqlalchemy import func, select, update
+from sqlalchemy import distinct, func, or_, select, update
 
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
@@ -111,7 +111,8 @@ def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
 
 
 def _load_allowed_categories(session) -> set[str]:
-    return {row[0] for row in session.execute(select(FaCategory.code)).all()}
+    # Use scalars() for clarity and to avoid tuple indexing
+    return set(session.scalars(select(FaCategory.code)).all())
 
 
 def _query_group_duplicates(
@@ -121,7 +122,14 @@ def _query_group_duplicates(
     source_account: str | None,
     group_eids: list[str],
     group_fps: list[str],
-) -> list[tuple[str | None, Mapping[str, Any]]]:
+    exemplars: int,
+) -> tuple[list[tuple[str | None, Mapping[str, Any]]], str | None]:
+    """Return a limited sample of duplicates and a unanimous default category.
+
+    Optimizes IO by splitting the work into:
+    - an aggregate over matches to determine if all non-null categories agree;
+    - a limited sample (``exemplars``) of rows for display.
+    """
     conds = []
     if group_eids:
         conds.append(FaTransaction.external_id.in_(group_eids))
@@ -129,18 +137,39 @@ def _query_group_duplicates(
         conds.append(FaTransaction.fingerprint_sha256.in_(group_fps))
 
     rows: list[tuple[str | None, Mapping[str, Any]]] = []
+    unanimous: str | None = None
     if conds:
-        stmt = (
-            select(
-                FaTransaction.category,
-                FaTransaction.raw_record,
-            )
-            .where(FaTransaction.source_provider == source_provider)
-            .where(FaTransaction.source_account == source_account)
-            .where(conds[0] if len(conds) == 1 else (conds[0] | conds[1]))
+        base_filters = (
+            (FaTransaction.source_provider == source_provider),
+            (FaTransaction.source_account == source_account),
+            or_(*conds),
         )
-        rows = [(row[0], row[1]) for row in session.execute(stmt).all()]
-    return rows
+
+        # Aggregate: count distinct non-null categories among matches
+        agg_stmt = (
+            select(func.count(distinct(FaTransaction.category)))
+            .where(*base_filters)
+            .where(FaTransaction.category.is_not(None))
+        )
+        distinct_count = session.execute(agg_stmt).scalar_one()
+        if distinct_count == 1:
+            # Fetch the single category value
+            unanimous = session.execute(
+                select(FaTransaction.category)
+                .where(*base_filters)
+                .where(FaTransaction.category.is_not(None))
+                .limit(1)
+            ).scalar_one()
+
+        # Fetch a limited sample for display
+        rows_stmt = (
+            select(FaTransaction.category, FaTransaction.raw_record)
+            .where(*base_filters)
+            .limit(exemplars)
+        )
+        rows = [(row[0], row[1]) for row in session.execute(rows_stmt).all()]
+
+    return rows, unanimous
 
 
 def _persist_group(
@@ -161,7 +190,8 @@ def _persist_group(
 
     now = func.now()
     eids = [p.external_id for p in group_items if p.external_id is not None]
-    fps = [p.fingerprint for p in group_items if p.external_id is None]
+    # Use all fingerprints from the group; do not exclude those that also have an external_id
+    fps = [p.fingerprint for p in group_items]
 
     base = update(FaTransaction).where(FaTransaction.source_provider == source_provider)
     if source_account is None:
@@ -178,10 +208,14 @@ def _persist_group(
         "updated_at": now,
     }
 
+    # Apply a single OR condition across the union of identifiers within the provider/account scope
+    conds = []
     if eids:
-        session.execute(base.where(FaTransaction.external_id.in_(eids)).values(**values))
+        conds.append(FaTransaction.external_id.in_(eids))
     if fps:
-        session.execute(base.where(FaTransaction.fingerprint_sha256.in_(fps)).values(**values))
+        conds.append(FaTransaction.fingerprint_sha256.in_(fps))
+    if conds:
+        session.execute(base.where(or_(*conds)).values(**values))
 
 
 
@@ -201,20 +235,26 @@ def _print_rows_block(
     print_fn(title)
     show = rows[:exemplars]
     for line in show:
-        print_fn("  ", line)
+        # Emit a single formatted string per line to avoid separator artifacts
+        print_fn(f"  {line}")
     extra = len(rows) - len(show)
     if extra > 0:
         print_fn(f"  +{extra} more")
 
 
 def _select_default_category(
-    db_dupes: list[tuple[str | None, Mapping[str, Any]]], group_items: list[_PreparedItem]
-) -> str | None:
-    if db_dupes:
-        cats = [cat for cat, _ in db_dupes if cat]
-        if cats and len(set(cats)) == 1:
-            return cats[0]
-    # Fallback: most common suggestion
+    *,
+    db_unanimous: str | None,
+    group_items: list[_PreparedItem],
+) -> str:
+    """Choose the default category for a group.
+
+    Prefers the unanimously agreed non-null category from DB duplicates when
+    present; otherwise falls back to the most-common suggestion among the input
+    group. Always returns a category string for non-empty groups.
+    """
+    if db_unanimous:
+        return db_unanimous
     counts = Counter(prep.suggested for prep in group_items)
     most_common = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
     return most_common[0]
@@ -298,12 +338,13 @@ def review_transaction_categories(
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
-            db_dupes = _query_group_duplicates(
+            db_dupes, db_default = _query_group_duplicates(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
                 group_eids=group_eids,
                 group_fps=group_fps,
+                exemplars=exemplars,
             )
 
             if db_dupes:
@@ -320,7 +361,9 @@ def review_transaction_categories(
             else:
                 print_fn("No DB duplicates matched for this group.")
 
-            chosen_default = _select_default_category(db_dupes, group_items)
+            chosen_default = _select_default_category(
+                db_unanimous=db_default, group_items=group_items
+            )
             print_fn(f"Proposed category: {chosen_default}")
 
             # Prompt until a valid category is provided
@@ -329,7 +372,6 @@ def review_transaction_categories(
                     "Press Enter to accept, or type a different category code: "
                 ).strip()
                 final_cat = chosen_default if not resp else resp
-                assert final_cat is not None
                 if final_cat in allowed:
                     break
                 print_fn("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
