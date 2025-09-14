@@ -134,4 +134,3 @@ def review_transaction_categories(
         database_url=database_url,
         exemplars=exemplars,
     )
-

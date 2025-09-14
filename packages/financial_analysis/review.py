@@ -61,8 +61,6 @@ def _materialize_and_prepare(
     return items, prepared
 
 
-
-
 class _DisjointSet:
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
@@ -106,8 +104,6 @@ def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
     for i in range(n):
         groups_map[dsu.find(i)].append(i)
     return groups_map
-
-
 
 
 def _load_allowed_categories(session) -> set[str]:
@@ -218,8 +214,6 @@ def _persist_group(
         session.execute(base.where(or_(*conds)).values(**values))
 
 
-
-
 def _fmt_tx_row(tx: Mapping[str, Any]) -> str:
     raw_date = tx.get("date")
     d = (raw_date or "").strip() if isinstance(raw_date, str) else raw_date
@@ -258,6 +252,7 @@ def _select_default_category(
     counts = Counter(prep.suggested for prep in group_items)
     most_common = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
     return most_common[0]
+
 
 def review_transaction_categories(
     transactions_with_categories: Iterable[CategorizedTransaction],
@@ -386,9 +381,7 @@ def review_transaction_categories(
 
             # Update result list
             for prep in group_items:
-                final[prep.pos] = CategorizedTransaction(
-                    transaction=prep.tx, category=final_cat
-                )
+                final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
 
             session.commit()
             print_fn("Saved.")
