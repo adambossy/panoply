@@ -11,7 +11,7 @@ dependencies = [
 
 # Console script for `uv run categorize-expenses`
 [project.scripts]
-categorize-expenses = "financial_analysis.cli:app"
+fa = "financial_analysis.cli:app"
 
 # This package exports the Python module "financial_analysis" (this directory).
 

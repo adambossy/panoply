@@ -369,7 +369,7 @@ app = typer.Typer(
 
 @app.command("categorize-expenses")
 def categorize_expenses_cmd(
-    csv_path: Path,
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
     *,
     persist: bool = typer.Option(
         False, help="Persist transactions and category updates to the database."
@@ -494,7 +494,7 @@ def categorize_expenses_cmd(
 
 @app.command("review-transaction-categories")
 def review_transaction_categories_cmd(
-    csv_path: Path,
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
     *,
     database_url: str | None = typer.Option(
         None, help="Override DATABASE_URL (falls back to env var)."
@@ -532,7 +532,6 @@ CSV_PATH_OPTION: OptionInfo = typer.Option(
 @app.callback(invoke_without_command=True)
 def _root(
     ctx: typer.Context,
-    csv_path: Annotated[Path, CSV_PATH_OPTION],
     *,
     persist: bool = typer.Option(
         False, help="Persist transactions and category updates to the database."
@@ -562,15 +561,9 @@ def _root(
     configure_logging()
 
     if ctx.invoked_subcommand is None:
-        # Delegate to the new command so flags behave the same at root level.
-        code = categorize_expenses_cmd(
-            csv_path,
-            persist=persist,
-            database_url=database_url,
-            source_provider=source_provider,
-            source_account=source_account,
-        )
-        raise typer.Exit(code)
+        # No subcommand provided - show help
+        typer.echo("No subcommand provided. Use --help to see available commands.")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script
