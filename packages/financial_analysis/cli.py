@@ -285,6 +285,11 @@ def cmd_review_transaction_categories(
     import os
     import sys
 
+    # Load .env here as a defensive guarantee (in addition to the Typer wrapper
+    # and root callback) so env-dependent checks work even if this function is
+    # called directly.
+    load_dotenv(override=False)
+
     from .api import categorize_expenses, review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
