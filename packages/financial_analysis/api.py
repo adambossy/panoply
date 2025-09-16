@@ -2,9 +2,9 @@
 
 This module primarily serves as a stable import surface. The concrete
 implementation of :func:`categorize_expenses` lives in
-``financial_analysis.categorize`` and is re-exported here. The
-``review_transaction_categories`` implementation now lives in
-``financial_analysis.review`` and is re-exported here for compatibility. Other
+``financial_analysis.categorize`` and is re-exported here. The minimal
+``review_transaction_categories`` implementation lives in
+``financial_analysis.review_dropdown`` and is re-exported here. Other
 interfaces remain stubs and raise ``NotImplementedError`` by design.
 """
 
@@ -125,7 +125,7 @@ def review_transaction_categories(
     function is actually used.
     """
 
-    from .review import review_transaction_categories as _impl
+    from .review_dropdown import review_transaction_categories as _impl
 
     return _impl(
         transactions_with_categories,

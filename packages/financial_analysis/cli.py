@@ -267,18 +267,11 @@ def cmd_review_transaction_categories(
     source_provider: str = "amex",
     source_account: str | None = None,
 ) -> int:
-    """Categorize a CSV, review groups interactively, and persist decisions.
+    """Categorize a CSV then review each transaction's category via a dropdown.
 
-    Flow
-    ----
-    - Load and normalize ``csv_path`` into CTV using the same adapters as
-      :func:`categorize_expenses_cmd`.
-    - Call :func:`financial_analysis.api.categorize_expenses` to obtain initial
-      category suggestions.
-    - Invoke :func:`financial_analysis.api.review_transaction_categories` with
-      ``source_provider``/``source_account`` and ``database_url`` so the user can
-      confirm/override categories per duplicate group and persist them
-      (``category_source='manual'``, ``verified=true``).
+    On a TTY, shows a minimal keyboard‑only dropdown (arrow keys + Enter) per
+    transaction with the suggested category pre‑selected. In non‑interactive
+    environments, the suggestions pass through unchanged.
     """
 
     import csv
