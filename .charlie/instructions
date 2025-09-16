@@ -4,8 +4,8 @@ CLI framework requirement
 Environment loading requirement
 - Load environment variables from a .env file using the python-dotenv package (e.g., load_dotenv). Do not use a custom dotenv loader. By default, the loader must not override environment variables that are already set.
 
-Scope
-- These are repository-specific conventions for Charlie to follow on future tasks.
+Scale and production quality
+- This app is for use for a single person. Don't assume that it needs observability, has any external clients, or any other production-quality frills.
 
 Code quality
 - Try to avoid long functions. Try to keep functions relatively decomposed with descriptive function names.
