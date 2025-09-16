@@ -261,32 +261,103 @@ def cmd_report_trends(csv_path: str) -> int:
 
 
 def cmd_review_transaction_categories(
-    csv_path_with_categories: str,
+    csv_path: str,
+    *,
+    database_url: str | None = None,
+    source_provider: str = "amex",
+    source_account: str | None = None,
 ) -> int:
-    """CLI handler for ``review-transaction-categories <csv_path_with_categories>`` (stub).
+    """Categorize a CSV, review groups interactively, and persist decisions.
 
-    Parameters
-    ----------
-    csv_path_with_categories:
-        Path to a CSV containing transactions that already include category
-        information.
-
-    Returns
-    -------
-    int
-        Process exit code. The function is a stub and does not perform I/O.
-
-    Notes
-    -----
-    - Mirrors the :func:`financial_analysis.api.review_transaction_categories` API.
-    - REPL interaction model (prompts, commands, confirmation flow), category
-      ontology, and any normalization rules are not specified and require
-      clarification.
-    - Output format for CLI execution is not specified and requires
-      clarification.
+    Flow
+    ----
+    - Load and normalize ``csv_path`` into CTV using the same adapters as
+      :func:`categorize_expenses_cmd`.
+    - Call :func:`financial_analysis.api.categorize_expenses` to obtain initial
+      category suggestions.
+    - Invoke :func:`financial_analysis.api.review_transaction_categories` with
+      ``source_provider``/``source_account`` and ``database_url`` so the user can
+      confirm/override categories per duplicate group and persist them
+      (``category_source='manual'``, ``verified=true``).
     """
 
-    raise NotImplementedError
+    import csv
+    import os
+    import sys
+
+    # Load .env here as a defensive guarantee (in addition to the Typer wrapper
+    # and root callback) so env-dependent checks work even if this function is
+    # called directly.
+    load_dotenv(override=False)
+
+    from .api import categorize_expenses, review_transaction_categories
+    from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
+    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
+        return 1
+
+    # Load CSV → CTV (robust detection: scan small prefix for Enhanced Details token)
+    try:
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            head = f.read(8192)
+            f.seek(0)
+            if "Extended Details" in head:
+                # Enhanced Details export (may include a preamble before the header)
+                ctv_items = list(to_ctv_enhanced_details(f))
+            else:
+                reader = csv.DictReader(f)
+                headers_set = set(reader.fieldnames or [])
+                if not headers_set:
+                    raise csv.Error(f"CSV appears to have no header row: {csv_path}")
+                required_headers = {
+                    "Reference",
+                    "Description",
+                    "Amount",
+                    "Date",
+                    "Appears On Your Statement As",
+                }
+                missing = sorted(h for h in required_headers if h not in headers_set)
+                if missing:
+                    raise csv.Error(
+                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
+                        + ", ".join(missing)
+                    )
+                ctv_items = list(to_ctv_standard(reader))
+    except FileNotFoundError:
+        print(f"Error: File not found: {csv_path}", file=sys.stderr)
+        return 1
+    except PermissionError:
+        print(f"Error: Permission denied: {csv_path}", file=sys.stderr)
+        return 1
+    except csv.Error as e:
+        print(f"Error: Failed to parse CSV: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
+        return 1
+
+    # Categorize to get suggestions
+    try:
+        suggestions = list(categorize_expenses(ctv_items))
+    except Exception as e:
+        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        return 1
+
+    # Run the interactive review+persist loop
+    try:
+        review_transaction_categories(
+            suggestions,
+            source_provider=source_provider,
+            source_account=source_account,
+            database_url=database_url,
+        )
+    except Exception as e:
+        print(f"Error: review failed: {e}", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 # ---- Typer-based console interface -------------------------------------------
@@ -304,7 +375,7 @@ app = typer.Typer(
 
 @app.command("categorize-expenses")
 def categorize_expenses_cmd(
-    csv_path: Path,
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
     *,
     persist: bool = typer.Option(
         False, help="Persist transactions and category updates to the database."
@@ -427,6 +498,30 @@ def categorize_expenses_cmd(
     return 0
 
 
+@app.command("review-transaction-categories")
+def review_transaction_categories_cmd(
+    csv_path: Annotated[Path, CSV_PATH_OPTION],
+    *,
+    database_url: str | None = typer.Option(
+        None, help="Override DATABASE_URL (falls back to env var)."
+    ),
+    source_provider: str = typer.Option(
+        "amex",
+        help="Source provider identifier for persistence (e.g., amex, chase, venmo).",
+    ),
+    source_account: str | None = typer.Option(
+        None, help="Optional source account identifier for persistence."
+    ),
+) -> int:
+    load_dotenv()
+    return cmd_review_transaction_categories(
+        str(csv_path),
+        database_url=database_url,
+        source_provider=source_provider,
+        source_account=source_account,
+    )
+
+
 # Module-level option object to satisfy ruff B008 (no calls in parameter
 # defaults). Typer will inspect this when used as a default value below.
 CSV_PATH_OPTION: OptionInfo = typer.Option(
@@ -443,7 +538,6 @@ CSV_PATH_OPTION: OptionInfo = typer.Option(
 @app.callback(invoke_without_command=True)
 def _root(
     ctx: typer.Context,
-    csv_path: Annotated[Path, CSV_PATH_OPTION],
     *,
     persist: bool = typer.Option(
         False, help="Persist transactions and category updates to the database."
@@ -473,15 +567,9 @@ def _root(
     configure_logging()
 
     if ctx.invoked_subcommand is None:
-        # Delegate to the new command so flags behave the same at root level.
-        code = categorize_expenses_cmd(
-            csv_path,
-            persist=persist,
-            database_url=database_url,
-            source_provider=source_provider,
-            source_account=source_account,
-        )
-        raise typer.Exit(code)
+        # No subcommand provided - show help
+        typer.echo("No subcommand provided. Use --help to see available commands.")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script

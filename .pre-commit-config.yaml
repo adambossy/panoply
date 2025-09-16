@@ -14,7 +14,11 @@ repos:
         entry: uv run mypy
         language: system
         types: [python]
-        args: ["--python-version=3.12"]
+        pass_filenames: false
+        args:
+          - "--python-version=3.12"
+          - packages/financial_analysis
+          - libs/db
 
 ci:
   autofix_commit_msg: "chore(pre-commit): auto-fix lint issues"

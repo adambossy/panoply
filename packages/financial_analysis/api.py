@@ -1,10 +1,11 @@
 """Public API interfaces and orchestration for the ``financial_analysis`` package.
 
 This module primarily serves as a stable import surface. The concrete
-implementation of :func:`categorize_expenses` now lives in
-``financial_analysis.categorize`` and is re-exported here as a thin
-compatibility shim. Other interfaces remain stubs and raise
-``NotImplementedError`` by design.
+implementation of :func:`categorize_expenses` lives in
+``financial_analysis.categorize`` and is re-exported here. The
+``review_transaction_categories`` implementation now lives in
+``financial_analysis.review`` and is re-exported here for compatibility. Other
+interfaces remain stubs and raise ``NotImplementedError`` by design.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ from .models import (
     TransactionPartitions,
     Transactions,
 )
+
+# DB and persistence imports are intentionally local within functions to keep
+# import-time costs low for consumers that don't use the DB-backed review flow.
 
 
 def identify_refunds(transactions: Transactions) -> Iterable[RefundMatch]:
@@ -108,26 +112,25 @@ def report_trends(transactions: Transactions) -> str:
 
 def review_transaction_categories(
     transactions_with_categories: Iterable[CategorizedTransaction],
-) -> Iterable[CategorizedTransaction]:
-    """Review and correct transaction categories via a REPL-style flow (interface only).
+    *,
+    source_provider: str,
+    source_account: str | None,
+    database_url: str | None = None,
+    exemplars: int = 5,
+) -> list[CategorizedTransaction]:
+    """Compatibility shim that delegates to ``financial_analysis.review``.
 
-    Input
-    -----
-    transactions_with_categories:
-        An iterable of transactions that already have categories assigned.
-
-    Output
-    ------
-    An iterable of transactions with verified or corrected categories following
-    a REPL-style review process (see
-    :class:`~financial_analysis.models.CategorizedTransaction`).
-
-    Notes
-    -----
-    - REPL interaction details (prompts, commands, confirmation flow) are not
-      specified and require clarification.
-    - The category ontology and normalization rules are not defined.
-    - CSV schema (required column names and formats) remains unspecified.
+    Defined here to keep the public import path stable while ensuring the heavy
+    DB-related imports in ``financial_analysis.review`` are only loaded when this
+    function is actually used.
     """
 
-    raise NotImplementedError
+    from .review import review_transaction_categories as _impl
+
+    return _impl(
+        transactions_with_categories,
+        source_provider=source_provider,
+        source_account=source_account,
+        database_url=database_url,
+        exemplars=exemplars,
+    )
