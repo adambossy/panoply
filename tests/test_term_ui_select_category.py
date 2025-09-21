@@ -47,7 +47,7 @@ def test_down_arrow_or_tab_opens_dropdown_and_enter_accepts():
     default = "Other"
     with pipe_session() as (pipe, sess):
         pipe.send_text("\x01\x0b")  # Ctrl-A, Ctrl-K to clear
-        pipe.send_text("\t\r")      # Open via Tab, then Enter to accept first item
+        pipe.send_text("\t\r")  # Open via Tab, then Enter to accept first item
         result = select_category(list(ALLOWED_CATEGORIES), default=default, session=sess)
         assert result == "Groceries"
 
