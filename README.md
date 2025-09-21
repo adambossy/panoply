@@ -58,3 +58,10 @@ See [docs/architecture.md](docs/architecture.md) and [docs/contributing.md](docs
 ## Interactive category review (terminal)
 
 The `review-transaction-categories` flow uses a prompt_toolkit completion menu backed by the canonical category list from the database. The predicted category is pre‑filled; press Enter to accept it, or press Tab/arrow keys to open and navigate the dropdown and Enter to confirm a different category.
+
+- The predicted category is pre‑filled; press Enter to accept it.
+- Press Down (↓) to open the dropdown. With an empty input this shows all categories; after typing a prefix it shows only matches. Use arrow keys to move and Enter to confirm the highlighted item.
+- When you type a strict prefix of a category, the remainder appears inline as greyed‑out “ghost” text. Press Tab to autocomplete without submitting, or press Enter to autocomplete and submit in one step.
+- If multiple categories match your prefix, the inline suggestion shows the top candidate (list order). Press Down to open the menu and choose another match.
+
+Requirements: this flow requires database access to load categories and persist choices. Provide a connection via `--database-url` or set `DATABASE_URL` in the environment, and ensure the workspace `db` package is installed/available. If the DB is unavailable, the CLI will print a clear error and exit non‑zero (it will not crash at import time).

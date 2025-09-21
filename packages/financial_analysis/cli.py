@@ -287,6 +287,25 @@ def cmd_review_transaction_categories(
     canonical category list from the database. The predicted category is
     pre-filled; press Enter to accept it, or press Tab/arrow keys to open and
     navigate the dropdown and Enter to confirm a different category.
+
+    - The predicted category is pre-filled; press Enter to accept it.
+    - Press Down (↓) at any time to open the dropdown. On an empty input it
+      shows all categories; after typing a prefix it shows only matches.
+    - As you type a strict prefix of a category, the remainder is shown inline
+      as greyed-out "ghost" text. Press Tab to complete the suggestion without
+      submitting; press Enter to complete and submit.
+    - When multiple categories match a prefix, the inline suggestion follows
+      the top candidate (list order). Use Down to open the menu and pick a
+      different match.
+
+    Requirements
+    ------------
+    This review flow requires database access to load the canonical category
+    list (``fa_categories``) and to persist decisions. Provide a connection via
+    ``--database-url`` or set ``DATABASE_URL`` in the environment, and ensure
+    the workspace ``db`` package is installed/available. If unavailable, the
+    command will print a clear error and exit non‑zero (it will not crash at
+    import time).
     """
 
     import csv
