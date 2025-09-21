@@ -184,7 +184,7 @@ def select_category(
         event.app.current_buffer.validate_and_handle()
 
     # Style for the inline suggestion (ghost text) — subtle grey.
-    style = Style.from_dict({"suggestion": "fg:#888888"})
+    style = Style.from_dict({"auto-suggestion": "fg:#888888"})
 
     # Ensure our key bindings are active. When a session is injected (tests),
     # create a new PromptSession that reuses the same input/output streams so

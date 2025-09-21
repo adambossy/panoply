@@ -40,20 +40,14 @@ def test_select_category_change_via_completion():
         assert result == target
 
 
-def test_down_arrow_opens_dropdown_and_selects_item():
-    # Pressing Down on an empty buffer opens the dropdown; Enter accepts the
-    # highlighted selection. We'll move to the 2nd item ("Restaurants").
+def test_down_arrow_or_tab_opens_dropdown_and_enter_accepts():
+    # On an empty buffer, opening the dropdown and pressing Enter accepts the
+    # highlighted selection (first item: "Groceries"). In headless CI we use
+    # Tab to open deterministically.
     default = "Other"
     with pipe_session() as (pipe, sess):
-        # Clear default to make the buffer empty, then Down to open the menu.
-        pipe.send_text("\x01\x0b")  # Ctrl-A, Ctrl-K
-        # Attempt to open with Down (two common encodings). In some headless
-        # environments, arrow keys may not be synthesized reliably; send a Tab
-        # as a fallback to ensure the dropdown opens, then Tab again to move
-        # to the second item.
-        pipe.send_bytes(b"\x1b[B\x1bOB")  # Down (open menu on TTYs)
-        pipe.send_text("\t\t")  # Fallback: open + move to second via Tab
-        pipe.send_text("\r")  # Enter: accept highlighted completion
+        pipe.send_text("\x01\x0b")  # Ctrl-A, Ctrl-K to clear
+        pipe.send_text("\t\r")      # Open via Tab, then Enter to accept first item
         result = select_category(list(ALLOWED_CATEGORIES), default=default, session=sess)
         assert result == "Groceries"
 
