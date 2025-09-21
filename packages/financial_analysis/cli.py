@@ -279,6 +279,14 @@ def cmd_review_transaction_categories(
       ``source_provider``/``source_account`` and ``database_url`` so the user can
       confirm/override categories per duplicate group and persist them
       (``category_source='manual'``, ``verified=true``).
+    
+
+    UI
+    --
+    Category selection uses a prompt_toolkit completion menu backed by the
+    canonical category list from the database. The predicted category is
+    pre-filled; press Enter to accept it, or press Tab/arrow keys to open and
+    navigate the dropdown and Enter to confirm a different category.
     """
 
     import csv

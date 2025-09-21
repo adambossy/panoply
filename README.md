@@ -54,3 +54,7 @@ Note: This workspace uses uv-managed execution. Prefer running tools via `uv run
 - Package scaffolding guide at `packages/README.md`
 
 See [docs/architecture.md](docs/architecture.md) and [docs/contributing.md](docs/contributing.md) for more details.
+
+## Interactive category review (terminal)
+
+The `review-transaction-categories` flow uses a prompt_toolkit completion menu backed by the canonical category list from the database. The predicted category is pre‑filled; press Enter to accept it, or press Tab/arrow keys to open and navigate the dropdown and Enter to confirm a different category.
