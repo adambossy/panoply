@@ -279,7 +279,7 @@ def cmd_review_transaction_categories(
       ``source_provider``/``source_account`` and ``database_url`` so the user can
       confirm/override categories per duplicate group and persist them
       (``category_source='manual'``, ``verified=true``).
-    
+
 
     UI
     --
