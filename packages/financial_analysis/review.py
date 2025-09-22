@@ -29,6 +29,10 @@ from .term_ui import (
     select_category_or_create as _select_category_or_create,
 )
 
+# ----------------------------------------------------------------------------
+# Preparation and grouping
+# ----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class _PreparedItem:
@@ -112,6 +116,11 @@ def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
     for i in range(n):
         groups_map[dsu.find(i)].append(i)
     return groups_map
+
+
+# ----------------------------------------------------------------------------
+# DB queries and persistence
+# ----------------------------------------------------------------------------
 
 
 def _load_allowed_categories(session) -> set[str]:
@@ -222,6 +231,11 @@ def _persist_group(
         session.execute(base.where(or_(*conds)).values(**values))
 
 
+# ----------------------------------------------------------------------------
+# Presentation helpers
+# ----------------------------------------------------------------------------
+
+
 def _fmt_tx_row(tx: Mapping[str, Any]) -> str:
     raw_date = tx.get("date")
     d = (raw_date or "").strip() if isinstance(raw_date, str) else raw_date
@@ -244,6 +258,45 @@ def _print_rows_block(
         print_fn(f"  +{extra} more")
 
 
+def _render_group_context(
+    *,
+    group_items: list[_PreparedItem],
+    db_dupes: list[tuple[str | None, Mapping[str, Any]]],
+    exemplars: int,
+    print_fn: Callable[..., None],
+) -> None:
+    """Render the input group and any DB duplicate examples.
+
+    Keeps user‑facing formatting and messages unchanged.
+    """
+    input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
+    _print_rows_block(
+        "Input group (date\tamount\tdesc/merchant\tid):",
+        input_rows,
+        exemplars=exemplars,
+        print_fn=print_fn,
+    )
+
+    if db_dupes:
+        dup_rows = [
+            _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
+            for cat, rec in db_dupes
+        ]
+        _print_rows_block(
+            "DB duplicates (first matches shown):",
+            dup_rows,
+            exemplars=exemplars,
+            print_fn=print_fn,
+        )
+    else:
+        print_fn("No DB duplicates matched for this group.")
+
+
+# ----------------------------------------------------------------------------
+# Category proposal and selection
+# ----------------------------------------------------------------------------
+
+
 def _select_default_category(
     *,
     db_unanimous: str | None,
@@ -260,6 +313,162 @@ def _select_default_category(
     counts = Counter(prep.suggested for prep in group_items)
     most_common = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
     return most_common[0]
+
+
+def _prepare_selector_inputs(
+    *,
+    allowed: set[str],
+    default_category: str,
+) -> tuple[list[str], str]:
+    """Return a deterministic options list and the default value for the selector.
+
+    This isolates normalization, sorting, and de‑duplication concerns from the
+    selection logic. The returned list is safe to pass to the terminal UI.
+    """
+    options = sorted(allowed)  # stable, case‑sensitive sort preserves current UX
+    return options, default_category
+
+
+def _is_creation_enabled(allow_create: bool | None) -> bool:
+    """Resolve the effective creation toggle.
+
+    Creation is enabled by default (None -> True) and can be explicitly
+    disabled by passing ``False``. Session permissions, if any, are enforced
+    upstream; this helper preserves current behavior.
+    """
+    return True if allow_create is None else bool(allow_create)
+
+
+def _invoke_category_selector(
+    *,
+    selector: Callable[[Iterable[str], str], str] | None,
+    allowed_options: list[str],
+    default_category: str,
+    allow_create: bool,
+) -> str | CreateCategoryRequest:
+    """Invoke either the injected selector or the creation‑aware UI.
+
+    Ensures type safety for the injected path before performing string ops.
+    """
+    if selector is not None:
+        resp = selector(allowed_options, default_category)
+        if not isinstance(resp, str):
+            raise TypeError(f"selector must return a string; got {type(resp).__name__}")
+        return resp.strip()
+    # Interactive, creation‑aware UI path
+    return _select_category_or_create(
+        allowed_options,
+        default=default_category,
+        allow_create=allow_create,
+    )
+
+
+def _process_create_category_intent(
+    *,
+    session,
+    intent: CreateCategoryRequest,
+    chosen_default: str,
+    allowed: set[str],
+    input_fn: Callable[[str], str],
+    print_fn: Callable[..., None],
+) -> str | None:
+    """Handle a creation intent: prompt, persist, feedback, and return selection.
+
+    Returns the selected category code on success. Returns ``None`` when the
+    operator cancels and the caller should reopen the selector.
+    """
+    # Open the mini‑prompt to collect/confirm the name, preserving the prior
+    # suggestion as the initial value.
+    initial_name = (intent.name or chosen_default).strip()
+    while True:
+        name = prompt_new_category_name(initial=initial_name)
+        if name is None:
+            # Cancel/back: return to selector, keep prior default.
+            return None
+        try:
+            res = createCategory(session, code=name)
+        except Exception as e:  # transient DB/network errors
+            print_fn(f"Error creating category: {e}")
+            choice = input_fn("Retry? [y/N]: ").strip().lower()
+            if choice in {"y", "yes"}:
+                continue
+            return None
+        # Update in‑process allowed set and select the row
+        cat_code = res["category"]["code"]
+        allowed.add(cat_code)
+        if res["created"]:
+            print_fn(f"Created '{cat_code}'. Selected.")
+        else:
+            print_fn("Already exists; selecting it")
+        return cat_code
+
+
+def _select_category_for_group(
+    *,
+    session,
+    allowed: set[str],
+    chosen_default: str,
+    selector: Callable[[Iterable[str], str], str] | None,
+    allow_create_toggle: bool | None,
+    input_fn: Callable[[str], str],
+    print_fn: Callable[..., None],
+) -> str:
+    """Select (or create) a category for the current group.
+
+    Encapsulates the interactive loop, injected selector path, creation intent
+    handling, and validation against the allowed set. Loops until a valid
+    category string is obtained.
+    """
+    options, default_category = _prepare_selector_inputs(
+        allowed=allowed, default_category=chosen_default
+    )
+    allow_create = _is_creation_enabled(allow_create_toggle)
+
+    while True:
+        selected = _invoke_category_selector(
+            selector=selector,
+            allowed_options=options,
+            default_category=default_category,
+            allow_create=allow_create,
+        )
+
+        # Creation intent path
+        if isinstance(selected, CreateCategoryRequest):
+            result = _process_create_category_intent(
+                session=session,
+                intent=selected,
+                chosen_default=default_category,
+                allowed=allowed,
+                input_fn=input_fn,
+                print_fn=print_fn,
+            )
+            if result is None:
+                # Cancel or retry exhausted: reopen the selector with prior default
+                # and refreshed options (in case any categories were added elsewhere).
+                options, default_category = _prepare_selector_inputs(
+                    allowed=allowed, default_category=default_category
+                )
+                continue
+            return result
+
+        # Normal selection path
+        if not isinstance(selected, str):
+            raise TypeError(f"selector must return a string; got {type(selected).__name__}")
+        resp_str = selected
+        final_cat = default_category if not resp_str.strip() else resp_str.strip()
+        if final_cat not in allowed:
+            print_fn("Invalid category. Enter one of: " + ", ".join(options))
+            # Refresh options in case allowed changed externally
+            options, default_category = _prepare_selector_inputs(
+                allowed=allowed, default_category=default_category
+            )
+            continue
+        return final_cat
+
+
+# ----------------------------------------------------------------------------
+# Orchestration
+# ----------------------------------------------------------------------------
 
 
 def review_transaction_categories(
@@ -342,15 +551,6 @@ def review_transaction_categories(
             idxs = groups_map[root]
             group_items = [prepared[i] for i in idxs]
 
-            # Show input summary
-            input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
-            _print_rows_block(
-                "Input group (date\tamount\tdesc/merchant\tid):",
-                input_rows,
-                exemplars=exemplars,
-                print_fn=print_fn,
-            )
-
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
@@ -363,86 +563,28 @@ def review_transaction_categories(
                 exemplars=exemplars,
             )
 
-            if db_dupes:
-                dup_rows = [
-                    _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-                    for cat, rec in db_dupes
-                ]
-                _print_rows_block(
-                    "DB duplicates (first matches shown):",
-                    dup_rows,
-                    exemplars=exemplars,
-                    print_fn=print_fn,
-                )
-            else:
-                print_fn("No DB duplicates matched for this group.")
+            # Render summaries for the input group and DB duplicates
+            _render_group_context(
+                group_items=group_items,
+                db_dupes=db_dupes,
+                exemplars=exemplars,
+                print_fn=print_fn,
+            )
 
             chosen_default = _select_default_category(
                 db_unanimous=db_default, group_items=group_items
             )
             print_fn(f"Proposed category: {chosen_default}")
 
-            # Prompt using prompt_toolkit's Completion Menu (with create support
-            # by default). Loop until a valid category is provided or created.
-            final_cat: str | None = None
-            while True:
-                selector_callable = selector
-                # Prefer injected selector when provided (tests); otherwise use
-                # the creation-aware UI when allowed.
-                if selector_callable is not None:
-                    selected: object = selector_callable(allowed, chosen_default).strip()
-                else:
-                    selected = _select_category_or_create(
-                        sorted(allowed),
-                        default=chosen_default,
-                        allow_create=(True if allow_create is None else allow_create),
-                    )
-
-                # Handle creation intent
-                if not isinstance(selected, str) and isinstance(selected, CreateCategoryRequest):
-                    # Open the mini-prompt to collect/confirm the name.
-                    initial_name = (selected.name or chosen_default).strip()
-                    while True:
-                        name = prompt_new_category_name(initial=initial_name)
-                        if name is None:
-                            # Cancel/back: return to selector, keep prior default.
-                            break
-                        try:
-                            res = createCategory(session, code=name)
-                        except Exception as e:
-                            # Transient DB/network errors: offer Retry/Cancel
-                            print_fn(f"Error creating category: {e}")
-                            choice = input_fn("Retry? [y/N]: ").strip().lower()
-                            if choice in {"y", "yes"}:
-                                continue
-                            else:
-                                break
-                        # Update in-process allowed set and select the row
-                        cat_code = res["category"]["code"]
-                        allowed.add(cat_code)
-                        if res["created"]:
-                            print_fn(f"Created '{cat_code}'. Selected.")
-                        else:
-                            print_fn("Already exists; selecting it")
-                        final_cat = cat_code
-                        break  # exit mini-prompt loop
-                    # If we didn't obtain a final selection, reopen the selector
-                    if final_cat is None:
-                        continue
-                else:
-                    # Normal selection path
-                    if not isinstance(selected, str):
-                        raise TypeError(
-                            f"selector must return a string; got {type(selected).__name__}"
-                        )
-                    resp_str = selected if isinstance(selected, str) else ""
-                    final_cat = chosen_default if not resp_str.strip() else resp_str.strip()
-                    if final_cat not in allowed:
-                        print_fn("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
-                        final_cat = None
-                        continue
-                # Valid selection obtained (existing or created)
-                break
+            final_cat = _select_category_for_group(
+                session=session,
+                allowed=allowed,
+                chosen_default=chosen_default,
+                selector=selector,
+                allow_create_toggle=allow_create,
+                input_fn=input_fn,
+                print_fn=print_fn,
+            )
 
             _persist_group(
                 session,
