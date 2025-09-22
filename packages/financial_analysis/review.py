@@ -18,9 +18,19 @@ from db.client import session_scope
 from db.models.finance import FaCategory, FaTransaction
 from sqlalchemy import distinct, func, or_, select, update
 
+from .categories import createCategory
+from .logging_setup import get_logger
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
-from .term_ui import select_category as _select_category_dropdown
+from .term_ui import (
+    CreateCategoryRequest,
+    prompt_new_category_name,
+)
+from .term_ui import (
+    select_category_or_create as _select_category_or_create,
+)
+
+_log = get_logger("financial_analysis.review")
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +275,7 @@ def review_transaction_categories(
     input_fn: Callable[[str], str] = builtins.input,
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
+    allow_create: bool | None = None,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
@@ -306,6 +317,9 @@ def review_transaction_categories(
         to select the category instead of the interactive dropdown. The
         callable receives ``(allowed_categories, default_category)`` and must
         return the chosen category string.
+    allow_create:
+        When ``True`` (default), enables the “Create new category” path inside
+        the interactive selector. Can be disabled in read‑only sessions.
     """
 
     # Materialize and precompute identifiers
@@ -371,20 +385,71 @@ def review_transaction_categories(
             )
             print_fn(f"Proposed category: {chosen_default}")
 
-            # Prompt using prompt_toolkit's Completion Menu. Loop until a valid
-            # category is provided (the completer constrains suggestions, but
-            # users may still type arbitrary text).
+            # Prompt using prompt_toolkit's Completion Menu (with create support
+            # by default). Loop until a valid category is provided or created.
+            final_cat: str | None = None
             while True:
-                selector_callable = selector or (
-                    lambda allowed_list, default_val: _select_category_dropdown(
-                        sorted(allowed_list), default=default_val
+                selector_callable = selector
+                # Prefer injected selector when provided (tests); otherwise use
+                # the creation-aware UI when allowed.
+                if selector_callable is not None:
+                    selected: object = selector_callable(allowed, chosen_default).strip()
+                else:
+                    selected = _select_category_or_create(
+                        sorted(allowed),
+                        default=chosen_default,
+                        allow_create=(True if allow_create is None else allow_create),
                     )
-                )
-                resp = selector_callable(allowed, chosen_default).strip()
-                final_cat = chosen_default if not resp else resp
-                if final_cat in allowed:
-                    break
-                print_fn("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
+
+                # Handle creation intent
+                if not isinstance(selected, str) and isinstance(selected, CreateCategoryRequest):
+                    # Open the mini-prompt to collect/confirm the name.
+                    initial_name = (selected.name or chosen_default).strip()
+                    while True:
+                        name = prompt_new_category_name(initial=initial_name)
+                        if name is None:
+                            # Cancel/back: return to selector, keep prior default.
+                            break
+                        try:
+                            _log.info(
+                                "category.create_prompt_submit",
+                                extra={"event": {"name": name}},
+                            )
+                            res = createCategory(session, code=name)
+                        except Exception as e:
+                            # Transient DB/network errors: offer Retry/Cancel
+                            print_fn(f"Error creating category: {e}")
+                            choice = input_fn("Retry? [y/N]: ").strip().lower()
+                            if choice in {"y", "yes"}:
+                                continue
+                            else:
+                                break
+                        # Update in-process allowed set and select the row
+                        cat_code = res["category"]["code"]
+                        allowed.add(cat_code)
+                        if res["created"]:
+                            print_fn(f"Created '{cat_code}'. Selected.")
+                        else:
+                            print_fn("Already exists; selecting it")
+                        final_cat = cat_code
+                        break  # exit mini-prompt loop
+                    # If we didn't obtain a final selection, reopen the selector
+                    if final_cat is None:
+                        continue
+                else:
+                    # Normal selection path
+                    if not isinstance(selected, str):
+                        raise TypeError(
+                            f"selector must return a string; got {type(selected).__name__}"
+                        )
+                    resp_str = selected if isinstance(selected, str) else ""
+                    final_cat = chosen_default if not resp_str.strip() else resp_str.strip()
+                    if final_cat not in allowed:
+                        print_fn("Invalid category. Enter one of: " + ", ".join(sorted(allowed)))
+                        final_cat = None
+                        continue
+                # Valid selection obtained (existing or created)
+                break
 
             _persist_group(
                 session,

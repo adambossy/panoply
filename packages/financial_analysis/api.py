@@ -118,6 +118,7 @@ def review_transaction_categories(
     database_url: str | None = None,
     exemplars: int = 5,
     select_category_fn=None,
+    allow_create: bool | None = None,
 ) -> list[CategorizedTransaction]:
     """Compatibility shim that delegates to ``financial_analysis.review``.
 
@@ -135,4 +136,5 @@ def review_transaction_categories(
         database_url=database_url,
         exemplars=exemplars,
         selector=select_category_fn,
+        allow_create=allow_create,
     )
