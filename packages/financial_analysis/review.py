@@ -19,7 +19,6 @@ from db.models.finance import FaCategory, FaTransaction
 from sqlalchemy import distinct, func, or_, select, update
 
 from .categories import createCategory
-from .logging_setup import get_logger
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
 from .term_ui import (
@@ -29,8 +28,6 @@ from .term_ui import (
 from .term_ui import (
     select_category_or_create as _select_category_or_create,
 )
-
-_log = get_logger("financial_analysis.review")
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,10 +408,6 @@ def review_transaction_categories(
                             # Cancel/back: return to selector, keep prior default.
                             break
                         try:
-                            _log.info(
-                                "category.create_prompt_submit",
-                                extra={"event": {"name": name}},
-                            )
                             res = createCategory(session, code=name)
                         except Exception as e:
                             # Transient DB/network errors: offer Retry/Cancel

@@ -23,11 +23,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .logging_setup import get_logger
-
-_log = get_logger("financial_analysis.categories")
-
-
 # ---------------------------
 # Name normalization/validation
 # ---------------------------
@@ -130,17 +125,7 @@ def createCategory(
     conflicts and returns the existing row with ``created=False``.
     """
 
-    # Structured telemetry: attempted
-    _log.info(
-        "metric category.create_attempted",  # counter name
-        extra={
-            "event": {
-                "metric": "category.create_attempted",
-                "code": code,
-                "display_name": display_name,
-            }
-        },
-    )
+    # Attempt creation after normalization/validation
 
     code_n = normalize_name(code)
     dn_raw = display_name if (display_name and display_name.strip()) else code_n
@@ -151,17 +136,9 @@ def createCategory(
     v_disp = validate_name(display_n)
     if not v_code.ok:
         reason = v_code.reason or "invalid_code"
-        _log.warning(
-            "metric category.create_failed",
-            extra={"event": {"metric": "category.create_failed", "reason": reason}},
-        )
         raise ValueError(f"Invalid category code: {reason}")
     if not v_disp.ok:
         reason = v_disp.reason or "invalid_display_name"
-        _log.warning(
-            "metric category.create_failed",
-            extra={"event": {"metric": "category.create_failed", "reason": reason}},
-        )
         raise ValueError(f"Invalid display name: {reason}")
 
     # Case-insensitive existence check across code OR display_name
@@ -178,16 +155,6 @@ def createCategory(
         .first()
     )
     if existing is not None:
-        _log.info(
-            "metric category.create_conflict",
-            extra={
-                "event": {
-                    "metric": "category.create_conflict",
-                    "reason": "duplicate_name_or_code_ci",
-                    "existing": _row_to_dict(existing),
-                }
-            },
-        )
         return {"category": _row_to_dict(existing), "created": False}
 
     # Insert row; rely on DB defaults for timestamps and is_active default=true
@@ -200,7 +167,7 @@ def createCategory(
     try:
         session.add(row)
         session.flush()  # obtain DB-computed defaults if any
-    except IntegrityError as err:  # pragma: no cover - depends on DB uniqueness
+    except IntegrityError:  # pragma: no cover - depends on DB uniqueness
         session.rollback()
         # Race or case-variance conflict; fetch existing and return no-op
         from db.models.finance import FaCategory  # local import
@@ -215,42 +182,18 @@ def createCategory(
             .scalars()
             .first()
         )
-        _log.info(
-            "metric category.create_conflict",
-            extra={
-                "event": {
-                    "metric": "category.create_conflict",
-                    "reason": "integrity_error",
-                    "detail": str(err.__class__.__name__),
-                }
-            },
-        )
         if existing is None:
             raise
         return {"category": _row_to_dict(existing), "created": False}
-    except Exception as err:  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive
         session.rollback()
-        _log.error(
-            "metric category.create_failed",
-            extra={
-                "event": {
-                    "metric": "category.create_failed",
-                    "reason": err.__class__.__name__,
-                }
-            },
-        )
         raise
 
-    _log.info(
-        "metric category.created",
-        extra={"event": {"metric": "category.created", "category": _row_to_dict(row)}},
-    )
     return {"category": _row_to_dict(row), "created": True}
 
 
 # PEP8-friendly alias (optional)
 create_category = createCategory
-
 
 __all__ = [
     "normalize_name",
