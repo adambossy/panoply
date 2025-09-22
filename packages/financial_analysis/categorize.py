@@ -16,7 +16,7 @@ import random
 import time
 from collections.abc import Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
 from openai.types.responses import ResponseTextConfigParam
@@ -37,6 +37,9 @@ _CONCURRENCY: int = 4
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
 _JITTER_PCT: float = 0.20
+
+# Centralized model name for Responses API calls
+_MODEL: str = "gpt-5"
 
 
 _logger = get_logger("financial_analysis.categorize")
@@ -108,6 +111,15 @@ def _validate_and_materialize(transactions: Transactions) -> list[Mapping[str, A
 
 
 def _paginate(n_total: int, page_size: int) -> Iterable[tuple[int, int, int]]:
+    """Yield page tuples ``(page_index, base, end)`` using half-open ranges.
+
+    Contract:
+    - Ranges are half-open: ``[base, end)`` with ``0 <= base < end <= n_total``.
+    - ``page_index`` is 0-based and increases monotonically.
+    - Consumers should treat any per-item ``idx`` as page-relative (0..count-1)
+      and align back to absolute indices via ``base + idx``.
+    """
+
     pages_total = math.ceil(n_total / page_size)
     for k in range(pages_total):
         base = k * page_size
@@ -119,12 +131,22 @@ def _build_page_payload(
     original_seq: list[Mapping[str, Any]],
     base: int,
     end: int,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[int, str]:
+    """Return ``(count, user_content)`` for a page slice ``[base, end)``.
+
+    Notes:
+    - Page-relative indices are emitted as ``idx`` starting at 0 and are used
+
+      later to align results back to absolute positions.
+    - The caller does not need the full CTV list; only the count is used for
+      alignment checks and logging.
+    """
+
     ctv_page: list[dict[str, Any]] = []
-    for local_idx, record in enumerate(original_seq[base:end]):
+    for page_idx, record in enumerate(original_seq[base:end]):
         ctv_page.append(
             {
-                "idx": local_idx,
+                "idx": page_idx,  # page-relative index (0..count-1)
                 "id": record.get("id"),
                 "description": record.get("description"),
                 "amount": record.get("amount"),
@@ -135,7 +157,7 @@ def _build_page_payload(
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
     user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
-    return ctv_page, user_content
+    return len(ctv_page), user_content
 
 
 def _create_client() -> OpenAI:
@@ -143,10 +165,15 @@ def _create_client() -> OpenAI:
 
 
 def _is_retryable(exc: BaseException) -> bool:
+    """Return True only for HTTP 429 and 5xx errors.
+
+    Narrowed per owner confirmation: parsing/validation errors (e.g.,
+    ``ValueError`` from JSON decode or schema alignment) are terminal and must
+    not be retried.
+    """
+
     sc = getattr(exc, "status_code", None)
     if isinstance(sc, int) and (sc == 429 or 500 <= sc < 600):
-        return True
-    if isinstance(exc, ValueError):  # parse_and_align / JSON decode
         return True
     return False
 
@@ -161,6 +188,12 @@ def _sleep_backoff(attempt_no: int) -> None:
     time.sleep(max(0.0, delay))
 
 
+class PageResult(NamedTuple):
+    page_index: int
+    base: int
+    categories: list[str]
+
+
 def _categorize_page(
     page_index: int,
     *,
@@ -169,21 +202,14 @@ def _categorize_page(
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
-) -> tuple[int, int, list[str]]:
+) -> PageResult:
     count = end - base
-    _logger.info(
-        "categorize_expenses:page_start page_index=%d base=%d end=%d count=%d",
-        page_index,
-        base,
-        end,
-        count,
-    )
 
-    ctv_page, user_content = _build_page_payload(original_seq, base, end)
+    count_built, user_content = _build_page_payload(original_seq, base, end)
     _logger.debug(
         "categorize_expenses:page_prepared page_index=%d ctv_count=%d content_length=%d",
         page_index,
-        len(ctv_page),
+        count_built,
         len(user_content),
     )
 
@@ -205,7 +231,7 @@ def _categorize_page(
                 _MAX_ATTEMPTS,
             )
             resp = client.responses.create(
-                model="gpt-5",
+                model=_MODEL,
                 instructions=system_instructions,
                 input=user_content,
                 text=text_cfg,
@@ -224,14 +250,10 @@ def _categorize_page(
                 dt_ms,
                 attempt - 1,
             )
-            _logger.info(
-                "categorize_expenses:page_complete page_index=%d categories_returned=%d",
-                page_index,
-                len(page_categories),
-            )
-            return (page_index, base, page_categories)
+            return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
+            # Retry scope narrowed to 429/5xx only.
             if attempt >= _MAX_ATTEMPTS or not _is_retryable(e):
                 _logger.error(
                     (
@@ -245,6 +267,7 @@ def _categorize_page(
                     e.__class__.__name__,
                 )
                 if isinstance(e, ValueError):
+                    # Parsing/validation failures are terminal (no retries)
                     raise e
                 raise RuntimeError(
                     f"categorize_expenses failed for page {page_index} "
@@ -276,8 +299,10 @@ def categorize_expenses(
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
 
-    Preserves exact behavior, outputs, and error semantics from the previous
-    implementation in ``api.py``.
+    Behavior notes:
+    - If ``transactions`` is empty, this function returns ``[]`` without
+      validating ``page_size`` (historical contract, preserved).
+    - Otherwise ``page_size`` must be a positive integer.
     """
 
     _logger.info("categorize_expenses:function_start page_size=%d", page_size)
@@ -302,84 +327,70 @@ def categorize_expenses(
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
     response_format = prompting.build_response_format(ALLOWED_CATEGORIES)
+    # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
-    futures: list[Future[tuple[int, int, list[str]]]] = []
+    futures: list[Future[PageResult]] = []
     _logger.info(
         "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
         pages_total,
         _CONCURRENCY,
     )
 
-    # Manage the executor explicitly to ensure non-blocking shutdown on failure.
-    pool = ThreadPoolExecutor(max_workers=_CONCURRENCY)
-    _shutdown_called = False
+    # Simplified executor lifecycle with context manager; cancel futures on error.
     try:
-        for page_index, base, end in _paginate(n_total, page_size):
-            fut = pool.submit(
-                _categorize_page,
-                page_index,
-                base=base,
-                end=end,
-                original_seq=original_seq,
-                system_instructions=system_instructions,
-                text_cfg=text_cfg,
-            )
-            futures.append(fut)
-            _logger.debug(
-                "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
-                page_index,
-                base,
-                end,
-                id(fut),
-            )
-
-        _logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
-
-        completed_count = 0
-        start_time = time.perf_counter()
-
-        for fut in as_completed(futures):
-            completed_count += 1
-            elapsed_time = time.perf_counter() - start_time
-            _logger.info(
-                (
-                    "categorize_expenses:future_completed completed=%d/%d "
-                    "elapsed_sec=%.2f future_id=%s"
-                ),
-                completed_count,
-                len(futures),
-                elapsed_time,
-                id(fut),
-            )
-
-            try:
-                page_index, base, page_categories = fut.result()
+        with ThreadPoolExecutor(max_workers=_CONCURRENCY) as pool:
+            for page_index, base, end in _paginate(n_total, page_size):
+                fut = pool.submit(
+                    _categorize_page,
+                    page_index,
+                    base=base,
+                    end=end,
+                    original_seq=original_seq,
+                    system_instructions=system_instructions,
+                    text_cfg=text_cfg,
+                )
+                futures.append(fut)
                 _logger.debug(
-                    (
-                        "categorize_expenses:processing_result page_index=%d "
-                        "base=%d categories_count=%d"
-                    ),
+                    "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
                     page_index,
                     base,
-                    len(page_categories),
-                )
-                for i, cat in enumerate(page_categories):
-                    categories_by_abs_idx[base + i] = cat
-            except Exception as e:
-                _logger.error(
-                    "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
+                    end,
                     id(fut),
-                    str(e),
-                    e.__class__.__name__,
                 )
-                raise
 
-        total_time = time.perf_counter() - start_time
-        _logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
+            _logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
 
+            start_time = time.perf_counter()
+            for fut in as_completed(futures):
+                try:
+                    result = fut.result()
+                    _logger.debug(
+                        (
+                            "categorize_expenses:processing_result page_index=%d "
+                            "base=%d categories_count=%d"
+                        ),
+                        result.page_index,
+                        result.base,
+                        len(result.categories),
+                    )
+                    for i, cat in enumerate(result.categories):
+                        categories_by_abs_idx[result.base + i] = cat
+                except Exception as e:
+                    _logger.error(
+                        "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
+                        id(fut),
+                        str(e),
+                        e.__class__.__name__,
+                    )
+                    # Cancel remaining work and propagate the error
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    raise
+
+            total_time = time.perf_counter() - start_time
+            _logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
     except Exception as e:
         _logger.error(
             "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
@@ -387,22 +398,7 @@ def categorize_expenses(
             e.__class__.__name__,
             len(futures),
         )
-
-        # Proactively shut down the pool to avoid waiting on not-yet-started tasks.
-        try:
-            pool.shutdown(wait=False, cancel_futures=True)
-            _shutdown_called = True
-        except Exception:  # pragma: no cover - defensive
-            pass
         raise
-    finally:
-        # Ensure the executor is shut down in all cases.
-        if not _shutdown_called:
-            try:
-                # Clean shutdown after successful completion or on BaseException paths.
-                pool.shutdown(wait=True)
-            except Exception:  # pragma: no cover - defensive
-                pass
 
     missing = [i for i, v in enumerate(categories_by_abs_idx) if v is None]
     if missing:  # pragma: no cover - defensive
