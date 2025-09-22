@@ -20,6 +20,7 @@ from sqlalchemy import distinct, func, or_, select, update
 
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
+from .term_ui import select_category as _select_category_dropdown
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +264,7 @@ def review_transaction_categories(
     exemplars: int = 5,
     input_fn: Callable[[str], str] = builtins.input,
     print_fn: Callable[..., None] = builtins.print,
+    selector: Callable[[Iterable[str], str], str] | None = None,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
@@ -288,7 +290,9 @@ def review_transaction_categories(
     Parameters
     ----------
     input_fn:
-        Function used to prompt for user input. Defaults to ``builtins.input``.
+        Deprecated. No longer used for category selection now that the
+        prompt_toolkit completion menu is integrated. Retained for compatibility
+        with previous signatures (and potential future prompts).
     print_fn:
         Function used to print output. Defaults to ``builtins.print``.
 
@@ -296,6 +300,12 @@ def review_transaction_categories(
     -------
     list[CategorizedTransaction]
         Finalized list reflecting the chosen category per input item.
+
+    selector:
+        Optional injection point for unit tests; when provided, it will be used
+        to select the category instead of the interactive dropdown. The
+        callable receives ``(allowed_categories, default_category)`` and must
+        return the chosen category string.
     """
 
     # Materialize and precompute identifiers
@@ -361,11 +371,16 @@ def review_transaction_categories(
             )
             print_fn(f"Proposed category: {chosen_default}")
 
-            # Prompt until a valid category is provided
+            # Prompt using prompt_toolkit's Completion Menu. Loop until a valid
+            # category is provided (the completer constrains suggestions, but
+            # users may still type arbitrary text).
             while True:
-                resp = input_fn(
-                    "Press Enter to accept, or type a different category code: "
-                ).strip()
+                selector_callable = selector or (
+                    lambda allowed_list, default_val: _select_category_dropdown(
+                        sorted(allowed_list), default=default_val
+                    )
+                )
+                resp = selector_callable(allowed, chosen_default).strip()
                 final_cat = chosen_default if not resp else resp
                 if final_cat in allowed:
                     break
