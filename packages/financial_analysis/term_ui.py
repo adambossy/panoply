@@ -22,7 +22,7 @@ from .categories import validate_name as _validate_name
 # Creation-aware selector and mini-prompt
 # ----------------------------------------------------------------------------
 
-CREATE_SENTINEL = "+ Create new category…"
+CREATE_SENTINEL = "+ Create new category..."
 
 
 class CreateCategoryRequest:
