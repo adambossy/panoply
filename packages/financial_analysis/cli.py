@@ -266,6 +266,7 @@ def cmd_review_transaction_categories(
     database_url: str | None = None,
     source_provider: str = "amex",
     source_account: str | None = None,
+    allow_create: bool | None = None,
 ) -> int:
     """Categorize a CSV, review groups interactively, and persist decisions.
 
@@ -379,6 +380,7 @@ def cmd_review_transaction_categories(
             source_provider=source_provider,
             source_account=source_account,
             database_url=database_url,
+            allow_create=allow_create,
         )
     except Exception as e:
         print(f"Error: review failed: {e}", file=sys.stderr)
@@ -539,13 +541,34 @@ def review_transaction_categories_cmd(
     source_account: str | None = typer.Option(
         None, help="Optional source account identifier for persistence."
     ),
+    allow_create: bool | None = typer.Option(
+        None,
+        help=(
+            "Enable in-flow category creation (default true). "
+            "Override with env FA_ALLOW_CATEGORY_CREATE=0."
+        ),
+    ),
 ) -> int:
     load_dotenv()
+    import os
+
+    # Resolve default from env when option omitted
+    if allow_create is None:
+        env_val = os.getenv("FA_ALLOW_CATEGORY_CREATE")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in {"0", "false", "no"}:
+                allow_create = False
+            elif v in {"1", "true", "yes"}:
+                allow_create = True
+            else:
+                allow_create = None
     return cmd_review_transaction_categories(
         str(csv_path),
         database_url=database_url,
         source_provider=source_provider,
         source_account=source_account,
+        allow_create=allow_create,
     )
 
 
