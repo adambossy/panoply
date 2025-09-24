@@ -17,6 +17,7 @@ from typing import Any
 from db.client import session_scope
 from db.models.finance import FaCategory, FaTransaction
 from sqlalchemy import distinct, func, or_, select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from .categories import createCategory
 from .models import CategorizedTransaction
@@ -386,8 +387,9 @@ def _process_create_category_intent(
             # Cancel/back: return to selector, keep prior default.
             return None
         try:
-            res = createCategory(session, code=name)
-        except Exception as e:  # transient DB/network errors
+            with session.begin_nested():
+                res = createCategory(session, code=name)
+        except SQLAlchemyError as e:  # transient DB/network errors
             print_fn(f"Error creating category: {e}")
             choice = input_fn("Retry? [y/N]: ").strip().lower()
             if choice in {"y", "yes"}:
