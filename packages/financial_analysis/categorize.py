@@ -203,13 +203,11 @@ def _categorize_page(
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
 ) -> PageResult:
-    count = end - base
-
-    count_built, user_content = _build_page_payload(original_seq, base, end)
+    count, user_content = _build_page_payload(original_seq, base, end)
     _logger.debug(
         "categorize_expenses:page_prepared page_index=%d ctv_count=%d content_length=%d",
         page_index,
-        count_built,
+        count,
         len(user_content),
     )
 
