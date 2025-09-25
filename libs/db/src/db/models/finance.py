@@ -35,7 +35,18 @@ class FaCategory(Base):
     __tablename__ = "fa_categories"
 
     code: Mapped[str] = mapped_column(String, primary_key=True)
-    display_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # Note: display_name uniqueness is enforced per-parent via a DB unique index
+    # created by Alembic (coalesce(parent_code,'__root__'), lower(display_name)).
+    # Do not declare a global unique constraint here.
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    # Optional parent reference; when set, must point to a top-level category
+    # (parent has parent_code IS NULL). Two-level depth is enforced in the
+    # service layer rather than with recursive DB constraints.
+    parent_code: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("fa_categories.code", deferrable=True, initially="DEFERRED"),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     sort_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
