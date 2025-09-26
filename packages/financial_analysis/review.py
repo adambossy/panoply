@@ -778,14 +778,17 @@ def review_transaction_categories(
                 k for k in (_norm_merchant_key(p.tx) for p in group_items) if k is not None
             }
             dupe_positions: list[int] = []
+            # Precompute set/max for O(1) membership and to avoid repeated max()
+            remaining_set = set(remaining)
+            last_idx = max(remaining)  # non-empty by construction
             for k in group_keys:
                 for pos in by_key.get(k, []):
-                    if pos in assigned or pos in remaining:
+                    if pos in assigned or pos in remaining_set:
                         continue
                     # Only consider items that appear later in the queue (by pos)
                     # to match the "look ahead" behavior; equal/earlier positions
                     # are either part of this group or already processed.
-                    if pos > max(remaining):
+                    if pos > last_idx:
                         dupe_positions.append(pos)
             # De‑duplicate while preserving order (readable explicit loop)
             seen: set[int] = set()
@@ -822,16 +825,19 @@ def review_transaction_categories(
                             group_items=dupe_items,
                             final_cat=final_cat,
                         )
-                        for p in dupe_positions:
-                            assigned.add(p)
-                            final[p] = CategorizedTransaction(
-                                transaction=prepared[p].tx, category=final_cat
-                            )
+                        # Commit first to guarantee persistence before mutating in-memory state
                         session.commit()
-                        print_fn("Saved duplicates.")
                     except Exception as e:  # pragma: no cover - defensive
                         session.rollback()
                         print_fn(f"Warning: failed to persist duplicates: {e}")
+                    else:
+                        for p in dupe_positions:
+                            assigned.add(p)
+                            # Index into final by the canonical position, not the prepared index
+                            final[prepared[p].pos] = CategorizedTransaction(
+                                transaction=prepared[p].tx, category=final_cat
+                            )
+                        print_fn("Saved duplicates.")
 
             # Blank line after handling this group (and any duplicates)
             print_fn("")
