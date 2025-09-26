@@ -40,6 +40,7 @@ default-groups = ["dev"]
 [tool.uv.sources]
 # Resolve the local workspace package from the uv workspace (see [tool.uv.workspace]).
 financial-analysis = { workspace = true }
+db = { workspace = true }
 
 [tool.uv.workspace]
 # All packages and libraries in the workspace live under these directories.

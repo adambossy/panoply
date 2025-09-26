@@ -8,6 +8,8 @@ dependencies = [
   "typer>=0.12.3",
   "python-dotenv>=1.0.1",
   "prompt_toolkit>=3.0.47",
+  # Workspace DB library (SQLAlchemy engine/session + models)
+  "db>=0",
 ]
 
 # Console script for `uv run categorize-expenses`
