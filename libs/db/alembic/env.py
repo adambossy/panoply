@@ -16,6 +16,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from dotenv import load_dotenv, find_dotenv
 
 
 def _load_dotenv_candidates() -> None:  # pragma: no cover - side-effectful
@@ -59,7 +60,18 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Normalize and validate database URL from environment or INI.
+# Load environment from a workspace-level .env if present.
+#
+# Use python-dotenv's `find_dotenv(usecwd=True)` so both invocation styles work:
+# - running Alembic from the repo root (CWD=/repo)
+# - running inside libs/db (CWD=/repo/libs/db)
+# In either case, this will discover `/repo/.env` without requiring the shell
+# to preload it.
+dotenv_path = find_dotenv(usecwd=True)
+if dotenv_path:
+    load_dotenv(dotenv_path=dotenv_path, override=False)
+
+# Normalize and validate database URL from environment or INI (env wins).
 db_url_maybe = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
 if db_url_maybe is None or db_url_maybe == "":
     raise RuntimeError(
