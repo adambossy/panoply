@@ -86,7 +86,6 @@
     "code": "Debt & Loans",
     "display_name": "Debt & Loans",
     "children": [
-      { "code": "Credit Card Payment", "display_name": "Credit Card Payment" },
       { "code": "Credit Card Interest & Fees", "display_name": "Credit Card Interest & Fees" },
       { "code": "Student Loan Payment", "display_name": "Student Loan Payment" },
       { "code": "Auto Loan Payment", "display_name": "Auto Loan Payment" },
