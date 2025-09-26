@@ -217,7 +217,7 @@ def _categorize_page(
     while True:
         t0 = time.perf_counter()
         try:
-            _logger.info(
+            _logger.debug(
                 (
                     "categorize_expenses:page_attempt page_index=%d base=%d count=%d "
                     "attempt=%d max=%d"
@@ -237,7 +237,7 @@ def _categorize_page(
             decoded = _extract_response_json_mapping(resp)
             page_categories = parse_and_align_categories(decoded, num_items=count)
             dt_ms = (time.perf_counter() - t0) * 1000.0
-            _logger.info(
+            _logger.debug(
                 (
                     "categorize_expenses:page_success page_index=%d base=%d count=%d "
                     "latency_ms=%.2f retries_used=%d"
@@ -303,7 +303,7 @@ def categorize_expenses(
     - Otherwise ``page_size`` must be a positive integer.
     """
 
-    _logger.info("categorize_expenses:function_start page_size=%d", page_size)
+    _logger.debug("categorize_expenses:function_start page_size=%d", page_size)
 
     original_seq = _validate_and_materialize(transactions)
     n_total = len(original_seq)
@@ -314,7 +314,7 @@ def categorize_expenses(
         raise ValueError("page_size must be a positive integer")
 
     pages_total = math.ceil(n_total / page_size)
-    _logger.info(
+    _logger.debug(
         "categorize_expenses:start pages_total=%d total_items=%d page_size=%d concurrency=%d",
         pages_total,
         n_total,
@@ -331,7 +331,7 @@ def categorize_expenses(
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
     futures: list[Future[PageResult]] = []
-    _logger.info(
+    _logger.debug(
         "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
         pages_total,
         _CONCURRENCY,
@@ -359,7 +359,7 @@ def categorize_expenses(
                     id(fut),
                 )
 
-            _logger.info("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
+            _logger.debug("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
 
             start_time = time.perf_counter()
             for fut in as_completed(futures):
@@ -388,7 +388,7 @@ def categorize_expenses(
                     raise
 
             total_time = time.perf_counter() - start_time
-            _logger.info("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
+            _logger.debug("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
     except Exception as e:
         _logger.error(
             "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",

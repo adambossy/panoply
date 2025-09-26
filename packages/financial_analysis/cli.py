@@ -11,7 +11,6 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 from __future__ import annotations  # ruff: noqa: I001
 
 from pathlib import Path
-from contextlib import contextmanager
 from typing import Annotated
 
 import typer
@@ -20,16 +19,6 @@ from typer.models import OptionInfo
 # Persistence imports are deferred inside the command to keep startup fast.
 
 from .logging_setup import configure_logging
-
-
-@contextmanager
-def _temporary_log_level(logger, level):
-    prev = logger.level
-    logger.setLevel(level)
-    try:
-        yield
-    finally:
-        logger.setLevel(prev)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -325,7 +314,6 @@ def cmd_review_transaction_categories(
     import sys
     import time
     from pathlib import Path
-    import logging
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -335,7 +323,6 @@ def cmd_review_transaction_categories(
     from .api import categorize_expenses, review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
-    from .logging_setup import get_logger
 
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
@@ -388,10 +375,8 @@ def cmd_review_transaction_categories(
         print()
         print(f"Categorizing {total} transactions in {filename}...")
 
-        pkg_logger = get_logger("financial_analysis")
         t0 = time.perf_counter()
-        with _temporary_log_level(pkg_logger, logging.WARNING):
-            suggestions = list(categorize_expenses(ctv_items))
+        suggestions = list(categorize_expenses(ctv_items))
         dt = time.perf_counter() - t0
         print(f"Finished categorizing {total} transactions ({dt:.2f}s)")
         print()
