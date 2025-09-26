@@ -12,7 +12,7 @@ Project conventions and constraints
   - This app targets a single-user workflow. Do not assume external clients, observability stacks, or production-grade frills by default.
 - General code quality
   - Prefer small functions with descriptive names; split large nested logic into helpers or modules instead of defining nested functions.
-  - Keep imports at module top level; avoid importing modules inside functions, except to lazily load optional/heavy dependencies or plugins, or to break import cycles.
+  - Keep imports at module top level; avoid importing modules inside functions.
   - Do not use banner comments.
 
 Core style principles
