@@ -20,9 +20,6 @@ Core style principles
   - Favor straightforward, explicit code over clever tricks.
   - Use a single, well-defined core path for public APIs (one way in, one way out).
   - Choose names that reflect intent (what or who), not implementation.
-- Natural, inevitable APIs
-  - Make the common case effortless; keep advanced configuration optional.
-  - Organize modules and components around domain concepts, not file layout.
 - Local reasoning and encapsulation
   - Each function/class has one clear responsibility.
   - Encapsulate invariants (validation, canonical forms) so callers can assume them.
