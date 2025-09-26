@@ -133,9 +133,12 @@ def upsert_transactions(
             "merchant": merchant,
             "memo": memo,
             "display_name": display_name,
-            "display_name_source": "import",
             "updated_at": now,
         }
+        # Only mark source="import" when we actually have a non-empty display name;
+        # otherwise allow the DB default ("unknown") to stand for clearer semantics.
+        if display_name:
+            insert_values["display_name_source"] = "import"
         if external_id is not None:
             payloads_with_eid.append(insert_values)
         else:

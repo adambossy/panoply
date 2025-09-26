@@ -876,7 +876,13 @@ def review_transaction_categories(
             try:
                 initial = _best_display_name_candidate(group_items)
                 resp = prompt_new_display_name(initial=initial)
-                if isinstance(resp, str) and resp.strip():
+                # Only treat as a rename when the operator actually changed the value;
+                # Enter on the pre-filled default should keep the current name.
+                if (
+                    isinstance(resp, str)
+                    and resp.strip()
+                    and resp.strip() != (initial or "").strip()
+                ):
                     chosen_display = resp.strip()
             except Exception:
                 # Non-fatal: any terminal issues should not block category saving
