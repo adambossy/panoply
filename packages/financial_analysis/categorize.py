@@ -204,12 +204,6 @@ def _categorize_page(
     text_cfg: ResponseTextConfigParam,
 ) -> PageResult:
     count, user_content = _build_page_payload(original_seq, base, end)
-    _logger.debug(
-        "categorize_expenses:page_prepared page_index=%d ctv_count=%d content_length=%d",
-        page_index,
-        count,
-        len(user_content),
-    )
 
     # Instantiate the client once per page and reuse across retries.
     client = _create_client()
@@ -217,17 +211,6 @@ def _categorize_page(
     while True:
         t0 = time.perf_counter()
         try:
-            _logger.debug(
-                (
-                    "categorize_expenses:page_attempt page_index=%d base=%d count=%d "
-                    "attempt=%d max=%d"
-                ),
-                page_index,
-                base,
-                count,
-                attempt,
-                _MAX_ATTEMPTS,
-            )
             resp = client.responses.create(
                 model=_MODEL,
                 instructions=system_instructions,
@@ -236,18 +219,6 @@ def _categorize_page(
             )
             decoded = _extract_response_json_mapping(resp)
             page_categories = parse_and_align_categories(decoded, num_items=count)
-            dt_ms = (time.perf_counter() - t0) * 1000.0
-            _logger.debug(
-                (
-                    "categorize_expenses:page_success page_index=%d base=%d count=%d "
-                    "latency_ms=%.2f retries_used=%d"
-                ),
-                page_index,
-                base,
-                count,
-                dt_ms,
-                attempt - 1,
-            )
             return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -303,7 +274,7 @@ def categorize_expenses(
     - Otherwise ``page_size`` must be a positive integer.
     """
 
-    _logger.debug("categorize_expenses:function_start page_size=%d", page_size)
+    # Progress logging intentionally omitted.
 
     original_seq = _validate_and_materialize(transactions)
     n_total = len(original_seq)
@@ -313,14 +284,7 @@ def categorize_expenses(
     if not isinstance(page_size, int) or page_size <= 0:
         raise ValueError("page_size must be a positive integer")
 
-    pages_total = math.ceil(n_total / page_size)
-    _logger.debug(
-        "categorize_expenses:start pages_total=%d total_items=%d page_size=%d concurrency=%d",
-        pages_total,
-        n_total,
-        page_size,
-        _CONCURRENCY,
-    )
+    # Determine pages lazily via _paginate(); no need to precompute total count.
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
@@ -331,11 +295,6 @@ def categorize_expenses(
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
     futures: list[Future[PageResult]] = []
-    _logger.debug(
-        "categorize_expenses:submitting_pages pages_total=%d concurrency=%d",
-        pages_total,
-        _CONCURRENCY,
-    )
 
     # Simplified executor lifecycle with context manager; cancel futures on error.
     try:
@@ -351,29 +310,12 @@ def categorize_expenses(
                     text_cfg=text_cfg,
                 )
                 futures.append(fut)
-                _logger.debug(
-                    "categorize_expenses:submitted_page page_index=%d base=%d end=%d future_id=%s",
-                    page_index,
-                    base,
-                    end,
-                    id(fut),
-                )
 
-            _logger.debug("categorize_expenses:all_pages_submitted futures_count=%d", len(futures))
+            # All pages submitted.
 
-            start_time = time.perf_counter()
             for fut in as_completed(futures):
                 try:
                     result = fut.result()
-                    _logger.debug(
-                        (
-                            "categorize_expenses:processing_result page_index=%d "
-                            "base=%d categories_count=%d"
-                        ),
-                        result.page_index,
-                        result.base,
-                        len(result.categories),
-                    )
                     for i, cat in enumerate(result.categories):
                         categories_by_abs_idx[result.base + i] = cat
                 except Exception as e:
@@ -387,8 +329,6 @@ def categorize_expenses(
                     pool.shutdown(wait=False, cancel_futures=True)
                     raise
 
-            total_time = time.perf_counter() - start_time
-            _logger.debug("categorize_expenses:all_pages_completed total_time_sec=%.2f", total_time)
     except Exception as e:
         _logger.error(
             "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
