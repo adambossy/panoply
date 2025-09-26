@@ -13,7 +13,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from db.client import session_scope
 from db.models.finance import FaCategory, FaTransaction
@@ -215,6 +215,13 @@ def _query_group_duplicates(
     return rows, unanimous
 
 
+# Closed set of allowed category sources to keep DB values consistent.
+CategorySource = Literal["manual", "rule"]
+CATEGORY_SOURCE_MANUAL: CategorySource = "manual"
+CATEGORY_SOURCE_RULE: CategorySource = "rule"
+ALLOWED_CATEGORY_SOURCES: set[str] = {CATEGORY_SOURCE_MANUAL, CATEGORY_SOURCE_RULE}
+
+
 def _persist_group(
     session,
     *,
@@ -223,7 +230,14 @@ def _persist_group(
     group_items: list[_PreparedItem],
     final_cat: str,
     display_name: str | None = None,
+    category_source: CategorySource = CATEGORY_SOURCE_MANUAL,
 ) -> None:
+    # Validate early to avoid any DB side effects on invalid input.
+    if category_source not in ALLOWED_CATEGORY_SOURCES:
+        raise ValueError(
+            "Unsupported category_source: "
+            f"{category_source!r}. Allowed: {sorted(ALLOWED_CATEGORY_SOURCES)}"
+        )
     # Ensure upsert before updates
     upsert_transactions(
         session,
@@ -245,7 +259,9 @@ def _persist_group(
 
     values = {
         "category": final_cat,
-        "category_source": "manual",
+        # Allow callers to distinguish operator selections from automated
+        # applications (e.g., rule-based prefill from DB duplicates).
+        "category_source": category_source,
         "category_confidence": None,
         "categorized_at": now,
         "verified": True,
@@ -751,6 +767,61 @@ def review_transaction_categories(
         if not allowed:
             raise RuntimeError("No categories present in fa_categories; cannot proceed")
 
+        # Prefill: one-time application from DB duplicates before interactive review.
+        # For each normalized merchant/description key present in this session,
+        # look up duplicates in the DB and, when they unanimously agree on a
+        # single non-null category, apply that category to all matching
+        # in-session rows immediately. Persist and mark them as finalized so the
+        # main loop will skip them. Emit one concise line per key.
+        prefilled_assigned: set[int] = set()
+        for _k, positions in by_key.items():
+            if not positions:
+                continue
+            group_items = [prepared[i] for i in positions]
+            group_eids = [p.external_id for p in group_items if p.external_id is not None]
+            group_fps = [p.fingerprint for p in group_items]
+
+            _exemplars = 1  # no display required; keep IO small
+            db_dupes, db_default = _query_group_duplicates(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_eids=group_eids,
+                group_fps=group_fps,
+                exemplars=_exemplars,
+            )
+            if not db_default:
+                continue
+
+            _persist_group(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_items=group_items,
+                final_cat=db_default,
+                category_source="rule",
+            )
+            session.commit()
+
+            for p in positions:
+                prefilled_assigned.add(p)
+                final[prepared[p].pos] = CategorizedTransaction(
+                    transaction=prepared[p].tx, category=db_default
+                )
+
+            merchant_display_raw = (
+                group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
+            )
+            merchant_display = str(merchant_display_raw).strip() or "unknown"
+            msg = (
+                f"Applied {db_default} to {len(positions)} in-session duplicates "
+                f"with merchant {merchant_display}."
+            )
+            print_fn(msg)
+
+        # Ensure the interactive loop skips prefilled positions
+        assigned |= prefilled_assigned
+
         # Deterministic order by first index in each group
         group_roots = sorted(groups_map.keys(), key=lambda r: min(groups_map[r]))
 
@@ -829,76 +900,7 @@ def review_transaction_categories(
             session.commit()
             print_fn("Saved.")
 
-            # Session-duplicate handling (based on merchant/description key)
-            # Look ahead for any remaining items whose normalized key matches
-            # any item in this group. Offer to apply the chosen category to all
-            # such duplicates now and skip their later review.
-            group_keys = {
-                k for k in (_norm_merchant_key(p.tx) for p in group_items) if k is not None
-            }
-            dupe_positions: list[int] = []
-            # Precompute set/max for O(1) membership and to avoid repeated max()
-            remaining_set = set(remaining)
-            last_idx = max(remaining)  # non-empty by construction
-            for k in group_keys:
-                for pos in by_key.get(k, []):
-                    if pos in assigned or pos in remaining_set:
-                        continue
-                    # Only consider items that appear later in the queue (by pos)
-                    # to match the "look ahead" behavior; equal/earlier positions
-                    # are either part of this group or already processed.
-                    if pos > last_idx:
-                        dupe_positions.append(pos)
-            # De‑duplicate while preserving order (readable explicit loop)
-            seen: set[int] = set()
-            unique_dupe_positions: list[int] = []
-            for p in dupe_positions:
-                if p not in seen:
-                    seen.add(p)
-                    unique_dupe_positions.append(p)
-            dupe_positions = unique_dupe_positions
-
-            if dupe_positions:
-                # Render a complete list per the requested copy
-                print_fn("Session duplicates (all matches):")
-                for pos in dupe_positions:
-                    print_fn(f"  {_fmt_tx_row(prepared[pos].tx)}")
-                # Prompt to apply now (default Yes) unless auto-confirm is set
-                if auto_confirm_dupes:
-                    choice_yes = True
-                else:
-                    prompt = (
-                        f"Apply '{final_cat}' to these {len(dupe_positions)} duplicates "
-                        "and skip their review? [Y/n]: "
-                    )
-                    resp = input_fn(prompt).strip().lower()
-                    choice_yes = resp in {"", "y", "yes"}
-
-                if choice_yes:
-                    dupe_items = [prepared[p] for p in dupe_positions]
-                    try:
-                        _persist_group(
-                            session,
-                            source_provider=source_provider,
-                            source_account=source_account,
-                            group_items=dupe_items,
-                            final_cat=final_cat,
-                        )
-                        # Commit first to guarantee persistence before mutating in-memory state
-                        session.commit()
-                    except Exception as e:  # pragma: no cover - defensive
-                        session.rollback()
-                        print_fn(f"Warning: failed to persist duplicates: {e}")
-                    else:
-                        for p in dupe_positions:
-                            assigned.add(p)
-                            # Index into final by the canonical position, not the prepared index
-                            final[prepared[p].pos] = CategorizedTransaction(
-                                transaction=prepared[p].tx, category=final_cat
-                            )
-                        print_fn("Saved duplicates.")
-
-            # Blank line after handling this group (and any duplicates)
+            # Blank line after handling this group
             print_fn("")
 
     return final
