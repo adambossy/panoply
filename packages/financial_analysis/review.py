@@ -268,20 +268,68 @@ def _fmt_amount(value: Any) -> str:
     return f"{sign}${abs(v):,.2f}"
 
 
-def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
-    """Return (headline, id_line) for a friendly one-transaction summary.
+def _normalize_amount_str(value: Any) -> str:
+    """Normalize an amount to a simple numeric string with an optional leading '-'.
 
-    Example:
-        ("$11.18 spent at `UBER` on 2025-08-29",
-         "ID = 320252410422442649.")
+    - Strips commas and a leading '$' if present.
+    - Converts accounting parentheses into a leading '-'.
+    - Preserves a single leading '-' if present after normalization.
     """
-    amount = _fmt_amount(tx.get("amount"))
+    s = str(value).strip()
+    s = s.replace(",", "")
+    if s.startswith("$"):
+        s = s[1:].strip()
+    if s.startswith("(") and s.endswith(")") and len(s) >= 2:
+        inner = s[1:-1].strip()
+        if inner.startswith("$"):
+            inner = inner[1:].strip()
+        s = f"-{inner}"
+    return s
+
+
+def _is_negative_amount(value: Any) -> bool:
+    """Best-effort negativity check that tolerates strings and accounting style."""
+    s = _normalize_amount_str(value)
+    return s.startswith("-")
+
+
+def _fmt_abs_amount(value: Any) -> str:
+    """Format an amount without its sign for headline readability."""
+    s = _normalize_amount_str(value)
+    try:
+        v = float(s)
+        return f"${abs(v):,.2f}"
+    except Exception:  # pragma: no cover - defensive
+        # Ensure no double '$' and drop any leading '-'
+        return f"${s.lstrip('-').lstrip('$')}"
+
+
+def _intent_from_amount(value: Any) -> tuple[str, str]:
+    """Map amount sign to intent (verb, preposition).
+
+    Assumes normalized sign semantics: negative = spend/outflow, non-negative =
+    income/inflow. If different connectors use different conventions, that
+    should be normalized during ingestion so presentation stays consistent.
+    """
+    neg = _is_negative_amount(value)
+    return ("spent", "at") if neg else ("received", "from")
+
+
+def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
+    """Return (headline, id_line) for a concise one-transaction summary."""
+    amount_raw = tx.get("amount")
+    amount = _fmt_abs_amount(amount_raw)
+    verb, prep = _intent_from_amount(amount_raw)
+
     name_raw = tx.get("merchant") or tx.get("description") or ""
-    name = str(name_raw).strip()
+    name = (str(name_raw).strip() or "unknown merchant")
+
     date_raw = tx.get("date")
-    date = str(date_raw).strip() if date_raw is not None else ""
-    eid = tx.get("id") or ""
-    headline = f"{amount} spent at `{name}` on {date}"
+    date = (str(date_raw).strip() if date_raw is not None else "").strip() or "unknown date"
+
+    eid = str(tx.get("id") or "unknown")
+
+    headline = f"{amount} {verb} {prep} `{name}` on {date}"
     id_line = f"ID = {eid}."
     return headline, id_line
 
@@ -303,13 +351,9 @@ def _render_group_context(
         print_fn(headline)
         if db_dupes:
             print_fn(id_line)
-            dup_rows = [
-                _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-                for cat, rec in db_dupes
-            ]
             _print_rows_block(
                 "DB duplicates (first matches shown):",
-                dup_rows,
+                _format_dup_rows(db_dupes),
                 exemplars=exemplars,
                 print_fn=print_fn,
             )
@@ -328,19 +372,23 @@ def _render_group_context(
         print_fn(f"+{extra} more in this group")
 
     if db_dupes:
-        dup_rows = [
-            _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-            for cat, rec in db_dupes
-        ]
         _print_rows_block(
             "DB duplicates (first matches shown):",
-            dup_rows,
+            _format_dup_rows(db_dupes),
             exemplars=exemplars,
             print_fn=print_fn,
         )
     else:
         print_fn("No DB duplicates matched for this group.")
     print_fn("")
+
+
+def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> list[str]:
+    """Format duplicate sample rows once to avoid repetition at call sites."""
+    return [
+        _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
+        for cat, rec in db_dupes
+    ]
 
 
 # ----------------------------------------------------------------------------

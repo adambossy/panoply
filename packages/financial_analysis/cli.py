@@ -11,6 +11,7 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 from __future__ import annotations  # ruff: noqa: I001
 
 from pathlib import Path
+from contextlib import contextmanager
 from typing import Annotated
 
 import typer
@@ -19,6 +20,16 @@ from typer.models import OptionInfo
 # Persistence imports are deferred inside the command to keep startup fast.
 
 from .logging_setup import configure_logging
+
+
+@contextmanager
+def _temporary_log_level(logger, level):
+    prev = logger.level
+    logger.setLevel(level)
+    try:
+        yield
+    finally:
+        logger.setLevel(prev)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -378,13 +389,9 @@ def cmd_review_transaction_categories(
         print(f"Categorizing {total} transactions in {filename}...")
 
         pkg_logger = get_logger("financial_analysis")
-        prev_level = pkg_logger.level
-        pkg_logger.setLevel(logging.WARNING)
         t0 = time.perf_counter()
-        try:
+        with _temporary_log_level(pkg_logger, logging.WARNING):
             suggestions = list(categorize_expenses(ctv_items))
-        finally:
-            pkg_logger.setLevel(prev_level)
         dt = time.perf_counter() - t0
         print(f"Finished categorizing {total} transactions ({dt:.2f}s)")
         print()
