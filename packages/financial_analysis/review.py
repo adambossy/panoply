@@ -9,6 +9,7 @@ preparation, grouping, querying, prompting, and persistence.
 from __future__ import annotations
 
 import builtins
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -76,6 +77,23 @@ def _materialize_and_prepare(
     return items, prepared
 
 
+def _norm_merchant_key(tx: Mapping[str, Any]) -> str | None:
+    """Return a case/whitespace‑insensitive key for grouping by merchant.
+
+    Falls back to ``description`` when ``merchant`` is missing/empty. Collapses
+    internal whitespace to a single space and lower‑cases the result. Returns
+    ``None`` when neither field is present.
+    """
+    raw = tx.get("merchant") or tx.get("description")
+    if raw is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(raw)).strip()
+    if not s:
+        return None
+    # Collapse internal whitespace (including newlines/tabs) and case‑fold
+    return " ".join(s.split()).casefold()
+
+
 class _DisjointSet:
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
@@ -94,30 +112,65 @@ class _DisjointSet:
 
 
 def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
-    """Build connectivity groups over indices by external_id OR fingerprint."""
+    """Group indices primarily by normalized merchant (fallback to id/fingerprint).
+
+    New behavior (per issue #44):
+    - Items sharing the same normalized merchant (or, when merchant is empty,
+      the same normalized description) are grouped together, regardless of
+      differing ids, amounts, or dates.
+    - When both merchant and description are empty, fall back to the previous
+      connectivity grouping by ``external_id`` or ``fingerprint`` to avoid
+      unintentionally merging unrelated rows.
+    """
 
     n = len(prepared)
-    dsu = _DisjointSet(n)
+    # Primary: group by normalized merchant/description key
+    by_merch: defaultdict[str, list[int]] = defaultdict(list)
+    # Fallback pool for items without a merchant/description key
+    fallback_idxs: list[int] = []
 
-    by_eid: defaultdict[str, list[int]] = defaultdict(list)
-    by_fp: defaultdict[str, list[int]] = defaultdict(list)
     for i, prep in enumerate(prepared):
-        if prep.external_id is not None:
-            by_eid[prep.external_id].append(i)
-        by_fp[prep.fingerprint].append(i)
+        key = _norm_merchant_key(prep.tx)
+        if key is None:
+            fallback_idxs.append(i)
+        else:
+            by_merch[key].append(i)
 
-    for _k, idxs in by_eid.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
-    for _k, idxs in by_fp.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
+    # Start with merchant-based groups, assigning deterministic roots
+    groups_map: dict[int, list[int]] = {}
+    for idxs in by_merch.values():
+        root = min(idxs)
+        groups_map[root] = sorted(idxs)
 
-    groups_map: defaultdict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        groups_map[dsu.find(i)].append(i)
+    # Fallback: maintain legacy connectivity semantics for the remainder
+    if fallback_idxs:
+        dsu = _DisjointSet(n)
+        by_eid: defaultdict[str, list[int]] = defaultdict(list)
+        by_fp: defaultdict[str, list[int]] = defaultdict(list)
+        for i in fallback_idxs:
+            prep = prepared[i]
+            if prep.external_id is not None:
+                by_eid[prep.external_id].append(i)
+            by_fp[prep.fingerprint].append(i)
+
+        for _k, idxs in by_eid.items():
+            base = idxs[0]
+            for j in idxs[1:]:
+                dsu.union(base, j)
+        for _k, idxs in by_fp.items():
+            base = idxs[0]
+            for j in idxs[1:]:
+                dsu.union(base, j)
+
+        # Build groups only over the fallback indices (deterministic roots)
+        tmp: dict[int, list[int]] = {}
+        for i in fallback_idxs:
+            r = dsu.find(i)
+            tmp.setdefault(r, []).append(i)
+        for idxs in tmp.values():
+            idxs.sort()
+            groups_map[min(idxs)] = idxs
+
     return groups_map
 
 
@@ -512,10 +565,12 @@ def review_transaction_categories(
 
     Behavior
     --------
-    - Group input transactions into duplicate groups where two items are in the
-      same group if they share the same external id (``transaction['id']``) OR
-      the same fingerprint (``compute_fingerprint``). Fingerprinting uses the
-      provided ``source_provider`` as context.
+    - Group input transactions primarily by a normalized merchant key. Two
+      items are in the same group when their ``merchant`` values match ignoring
+      case and internal whitespace. When ``merchant`` is empty/missing, the
+      ``description`` field is used for the key. If both are empty, the legacy
+      fallback applies: items are grouped when they share the same external id
+      (``transaction['id']``) OR the same fingerprint (``compute_fingerprint``).
     - For each group, query DB duplicates in ``fa_transactions`` matching the
       same ``(source_provider, source_account)`` and either any group external
       id or any group fingerprint.
