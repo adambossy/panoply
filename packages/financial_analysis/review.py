@@ -13,7 +13,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from db.client import session_scope
 from db.models.finance import FaCategory, FaTransaction
@@ -214,6 +214,13 @@ def _query_group_duplicates(
     return rows, unanimous
 
 
+# Closed set of allowed category sources to keep DB values consistent.
+CategorySource = Literal["manual", "rule"]
+CATEGORY_SOURCE_MANUAL: CategorySource = "manual"
+CATEGORY_SOURCE_RULE: CategorySource = "rule"
+ALLOWED_CATEGORY_SOURCES: set[str] = {CATEGORY_SOURCE_MANUAL, CATEGORY_SOURCE_RULE}
+
+
 def _persist_group(
     session,
     *,
@@ -221,8 +228,14 @@ def _persist_group(
     source_account: str | None,
     group_items: list[_PreparedItem],
     final_cat: str,
-    category_source: str = "manual",
+    category_source: CategorySource = CATEGORY_SOURCE_MANUAL,
 ) -> None:
+    # Validate early to avoid any DB side effects on invalid input.
+    if category_source not in ALLOWED_CATEGORY_SOURCES:
+        raise ValueError(
+            "Unsupported category_source: "
+            f"{category_source!r}. Allowed: {sorted(ALLOWED_CATEGORY_SOURCES)}"
+        )
     # Ensure upsert before updates
     upsert_transactions(
         session,
