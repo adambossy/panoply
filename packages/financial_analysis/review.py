@@ -19,12 +19,14 @@ from db.models.finance import FaCategory, FaTransaction
 from sqlalchemy import distinct, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
-from .categories import createCategory
+from .categories import createCategory, list_top_level_categories
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint, upsert_transactions
 from .term_ui import (
+    TOP_LEVEL_SENTINEL,
     CreateCategoryRequest,
     prompt_new_category_name,
+    prompt_select_parent,
 )
 from .term_ui import (
     select_category_or_create as _select_category_or_create,
@@ -386,9 +388,30 @@ def _process_create_category_intent(
         if name is None:
             # Cancel/back: return to selector, keep prior default.
             return None
+        # Prompt for parent selection (top-level allowed)
+        parents = list_top_level_categories(session)
+        parent_names = [p["display_name"] for p in parents]
+        parent_choice = prompt_select_parent(parent_names)
+        if parent_choice is None:
+            # Cancel: reopen selector
+            return None
+        parent_code: str | None
+        if parent_choice == TOP_LEVEL_SENTINEL:
+            parent_code = None
+        else:
+            # Lookup chosen parent by display_name (case-insensitive)
+            parent_lookup = {p["display_name"].lower(): p["code"] for p in parents}
+            parent_code = parent_lookup.get(parent_choice.lower())
+            if parent_code is None:
+                # Shouldn't happen; defensive fallback to top-level
+                parent_code = None
         try:
             with session.begin_nested():
-                res = createCategory(session, code=name)
+                res = createCategory(session, code=name, parent_code=parent_code)
+        except ValueError as e:  # validation/user error; allow retry without exiting
+            print_fn(str(e))
+            # Let the operator try another name/parent
+            continue
         except SQLAlchemyError as e:  # transient DB/network errors
             print_fn(f"Error creating category: {e}")
             choice = input_fn("Retry? [y/N]: ").strip().lower()

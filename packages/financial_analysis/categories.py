@@ -74,6 +74,7 @@ def validate_name(name: str, *, min_len: int = 1, max_len: int = 64) -> NameVali
 class CategoryDict(TypedDict):
     code: str
     display_name: str
+    parent_code: str | None
     is_active: bool
     sort_order: int | None
 
@@ -87,6 +88,7 @@ def _row_to_dict(row) -> CategoryDict:  # pragma: no cover - trivial mapping
     return {
         "code": row.code,
         "display_name": row.display_name,
+        "parent_code": getattr(row, "parent_code", None),
         "is_active": bool(row.is_active),
         "sort_order": row.sort_order,
     }
@@ -97,6 +99,7 @@ def createCategory(
     *,
     code: str,
     display_name: str | None = None,
+    parent_code: str | None = None,
     sort_order: int | None = None,
 ) -> CreateCategoryResult:
     """Create a new category if it doesn't exist (case-insensitive).
@@ -141,26 +144,55 @@ def createCategory(
         reason = v_disp.reason or "invalid_display_name"
         raise ValueError(f"Invalid display name: {reason}")
 
-    # Case-insensitive existence check across code OR display_name
+    # Case-insensitive existence check on code; and per-parent on display_name
     from db.models.finance import FaCategory  # local import
 
-    existing = (
-        session.execute(
-            select(FaCategory).where(
-                (func.lower(FaCategory.code) == code_n.lower())
-                | (func.lower(FaCategory.display_name) == display_n.lower())
+    # Validate parent (if provided): parent must exist and be a top-level category
+    parent_row = None
+    if parent_code is not None:
+        parent_row = (
+            session.execute(
+                select(FaCategory).where(func.lower(FaCategory.code) == parent_code.lower())
             )
+            .scalars()
+            .first()
         )
+        if parent_row is None:
+            raise ValueError(f"Parent category not found: {parent_code!r}")
+        if getattr(parent_row, "parent_code", None) is not None:
+            raise ValueError("Parent must be a top-level category (cannot be a child)")
+
+    # Existing by code (global, case-insensitive)
+    existing = (
+        session.execute(select(FaCategory).where(func.lower(FaCategory.code) == code_n.lower()))
         .scalars()
         .first()
     )
     if existing is not None:
         return {"category": _row_to_dict(existing), "created": False}
 
+    # Check display_name uniqueness within the chosen parent scope (case-insensitive)
+    scope_parent = parent_row.code if parent_row is not None else None
+    name_conflict = (
+        session.execute(
+            select(FaCategory).where(
+                func.lower(FaCategory.display_name) == display_n.lower(),
+                (FaCategory.parent_code == scope_parent)
+                if scope_parent is not None
+                else FaCategory.parent_code.is_(None),
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if name_conflict is not None:
+        raise ValueError(f"Display name '{display_n}' already exists under the selected parent")
+
     # Insert row; rely on DB defaults for timestamps and is_active default=true
     row = FaCategory(
         code=code_n,
         display_name=display_n,
+        parent_code=scope_parent,
         is_active=True,
         sort_order=sort_order,
     )
@@ -169,20 +201,32 @@ def createCategory(
         session.flush()  # obtain DB-computed defaults if any
     except IntegrityError:  # pragma: no cover - depends on DB uniqueness
         session.rollback()
-        # Race or case-variance conflict; fetch existing and return no-op
-        from db.models.finance import FaCategory  # local import
-
-        existing = (
+        # Friendly handling of per-parent display_name conflicts under races
+        conflict = (
             session.execute(
                 select(FaCategory).where(
-                    (func.lower(FaCategory.code) == code_n.lower())
-                    | (func.lower(FaCategory.display_name) == display_n.lower())
+                    func.lower(FaCategory.display_name) == display_n.lower(),
+                    (FaCategory.parent_code == scope_parent)
+                    if scope_parent is not None
+                    else FaCategory.parent_code.is_(None),
                 )
             )
             .scalars()
             .first()
         )
+        if conflict is not None:
+            raise ValueError(
+                f"Display name '{display_n}' already exists under the selected parent"
+            ) from None
+
+        # Otherwise, treat a duplicate code as idempotent
+        existing = (
+            session.execute(select(FaCategory).where(func.lower(FaCategory.code) == code_n.lower()))
+            .scalars()
+            .first()
+        )
         if existing is None:
+            # Unknown IntegrityError; bubble up original
             raise
         return {"category": _row_to_dict(existing), "created": False}
     except Exception:  # pragma: no cover - defensive
@@ -190,6 +234,58 @@ def createCategory(
         raise
 
     return {"category": _row_to_dict(row), "created": True}
+
+
+def list_top_level_categories(session: Session) -> list[CategoryDict]:
+    """Return all top-level categories (``parent_code IS NULL``) sorted by sort/name."""
+    from db.models.finance import FaCategory  # local import
+
+    rows = (
+        session.execute(
+            select(FaCategory)
+            .where(FaCategory.parent_code.is_(None))
+            .order_by(func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name)
+        )
+        .scalars()
+        .all()
+    )
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_categories_hierarchical(session: Session) -> list[CategoryDict]:
+    """Return all categories in hierarchical order (parents followed by their children).
+
+    The returned list is flat but ordered for easy rendering. Each element
+    includes ``parent_code``; callers can group by that field to build a tree.
+    Fetches all rows in a single query to avoid N+1 queries.
+    """
+    from collections import defaultdict
+
+    from db.models.finance import FaCategory  # local import
+
+    rows = (
+        session.execute(
+            select(FaCategory).order_by(
+                func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    by_parent: dict[str | None, list] = defaultdict(list)
+    parents: list = []
+    for r in rows:
+        if getattr(r, "parent_code", None) is None:
+            parents.append(r)
+        else:
+            by_parent[r.parent_code].append(r)
+
+    out: list[CategoryDict] = []
+    for p in parents:
+        out.append(_row_to_dict(p))
+        out.extend(_row_to_dict(c) for c in by_parent.get(p.code, []))
+    return out
 
 
 # PEP8-friendly alias (optional)
@@ -200,6 +296,8 @@ __all__ = [
     "validate_name",
     "createCategory",
     "create_category",
+    "list_top_level_categories",
+    "list_categories_hierarchical",
     "NameValidation",
     "CategoryDict",
     "CreateCategoryResult",

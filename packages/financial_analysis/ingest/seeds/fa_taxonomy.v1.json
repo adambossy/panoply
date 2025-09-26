@@ -1,0 +1,195 @@
+[
+  {
+    "code": "Income",
+    "display_name": "Income",
+    "children": [
+      { "code": "Salary & Wages", "display_name": "Salary & Wages" },
+      { "code": "Bonus & Commission", "display_name": "Bonus & Commission" },
+      { "code": "Tips", "display_name": "Tips" },
+      { "code": "Self-Employment & Side Hustle", "display_name": "Self-Employment & Side Hustle" },
+      { "code": "Government Benefits", "display_name": "Government Benefits" },
+      { "code": "Interest & Dividends", "display_name": "Interest & Dividends" },
+      { "code": "Tax Refunds", "display_name": "Tax Refunds" },
+      { "code": "Gifts Received", "display_name": "Gifts Received" }
+    ]
+  },
+  {
+    "code": "Housing & Utilities",
+    "display_name": "Housing & Utilities",
+    "children": [
+      { "code": "Rent", "display_name": "Rent" },
+      { "code": "Mortgage Payment", "display_name": "Mortgage Payment" },
+      { "code": "HOA/Condo Fees", "display_name": "HOA/Condo Fees" },
+      { "code": "Electricity", "display_name": "Electricity" },
+      { "code": "Gas", "display_name": "Gas" },
+      { "code": "Water & Sewer", "display_name": "Water & Sewer" },
+      { "code": "Trash & Recycling", "display_name": "Trash & Recycling" },
+      { "code": "Internet", "display_name": "Internet" },
+      { "code": "Mobile Phone", "display_name": "Mobile Phone" },
+      { "code": "Home Services & Maintenance", "display_name": "Home Services & Maintenance" },
+      { "code": "Home Renovation", "display_name": "Home Renovation" }
+    ]
+  },
+  {
+    "code": "Food & Dining",
+    "display_name": "Food & Dining",
+    "children": [
+      { "code": "Groceries", "display_name": "Groceries" },
+      { "code": "Restaurants", "display_name": "Restaurants" },
+      { "code": "Treats", "display_name": "Treats" },
+      { "code": "Coffee Shops", "display_name": "Coffee Shops" },
+      { "code": "Delivery & Takeout", "display_name": "Delivery & Takeout" },
+      { "code": "Meal Kits", "display_name": "Meal Kits" },
+      { "code": "Bars & Alcohol", "display_name": "Bars & Alcohol" }
+    ]
+  },
+  {
+    "code": "Transportation & Auto",
+    "display_name": "Transportation & Auto",
+    "children": [
+      { "code": "Fuel", "display_name": "Fuel" },
+      { "code": "EV Charging", "display_name": "EV Charging" },
+      { "code": "Public Transit", "display_name": "Public Transit" },
+      { "code": "Rides & Taxis", "display_name": "Rides & Taxis" },
+      { "code": "Parking & Tolls", "display_name": "Parking & Tolls" },
+      { "code": "Auto Service & Parts", "display_name": "Auto Service & Parts" },
+      { "code": "Car Wash & Detailing", "display_name": "Car Wash & Detailing" }
+    ]
+  },
+  {
+    "code": "Health & Wellness",
+    "display_name": "Health & Wellness",
+    "children": [
+      { "code": "Doctor & Hospital", "display_name": "Doctor & Hospital" },
+      { "code": "Pharmacy & Prescriptions", "display_name": "Pharmacy & Prescriptions" },
+      { "code": "Dental", "display_name": "Dental" },
+      { "code": "Vision", "display_name": "Vision" },
+      { "code": "Mental Health", "display_name": "Mental Health" },
+      { "code": "Fitness & Gym", "display_name": "Fitness & Gym" },
+      { "code": "Wellness Products", "display_name": "Wellness Products" }
+    ]
+  },
+  {
+    "code": "Insurance",
+    "display_name": "Insurance",
+    "children": [
+      { "code": "Health Insurance", "display_name": "Health Insurance" },
+      { "code": "Auto Insurance", "display_name": "Auto Insurance" },
+      { "code": "Home/Renters Insurance", "display_name": "Home/Renters Insurance" },
+      { "code": "Flood Insurance", "display_name": "Flood Insurance" },
+      { "code": "Life & Disability Insurance", "display_name": "Life & Disability Insurance" },
+      { "code": "Pet Insurance", "display_name": "Pet Insurance" },
+      { "code": "Travel Insurance", "display_name": "Travel Insurance" }
+    ]
+  },
+  {
+    "code": "Debt & Loans",
+    "display_name": "Debt & Loans",
+    "children": [
+      { "code": "Credit Card Interest & Fees", "display_name": "Credit Card Interest & Fees" },
+      { "code": "Student Loan Payment", "display_name": "Student Loan Payment" },
+      { "code": "Auto Loan Payment", "display_name": "Auto Loan Payment" },
+      { "code": "Personal/BNPL Loan Payment", "display_name": "Personal/BNPL Loan Payment" },
+      { "code": "Loan Fees & Adjustments", "display_name": "Loan Fees & Adjustments" }
+    ]
+  },
+  {
+    "code": "Savings & Investments",
+    "display_name": "Savings & Investments",
+    "children": [
+      { "code": "Savings Contribution", "display_name": "Savings Contribution" },
+      { "code": "Retirement Contribution", "display_name": "Retirement Contribution" },
+      { "code": "Investment Buy", "display_name": "Investment Buy" },
+      { "code": "Investment Sell/Withdrawal", "display_name": "Investment Sell/Withdrawal" },
+      { "code": "Investment Fees & Commissions", "display_name": "Investment Fees & Commissions" },
+      { "code": "529/Other Long-Term Savings", "display_name": "529/Other Long-Term Savings" }
+    ]
+  },
+  {
+    "code": "Shopping & Personal Care",
+    "display_name": "Shopping & Personal Care",
+    "children": [
+      { "code": "Clothing & Accessories", "display_name": "Clothing & Accessories" },
+      { "code": "Household Supplies", "display_name": "Household Supplies" },
+      { "code": "Electronics & Gadgets", "display_name": "Electronics & Gadgets" },
+      { "code": "Furniture & Appliances", "display_name": "Furniture & Appliances" },
+      { "code": "Beauty & Personal Care", "display_name": "Beauty & Personal Care" },
+      { "code": "Pets", "display_name": "Pets" },
+      { "code": "Postage & Shipping", "display_name": "Postage & Shipping" }
+    ]
+  },
+  {
+    "code": "Entertainment & Subscriptions",
+    "display_name": "Entertainment & Subscriptions",
+    "children": [
+      { "code": "Streaming Video", "display_name": "Streaming Video" },
+      { "code": "Music & Audio", "display_name": "Music & Audio" },
+      { "code": "Gaming", "display_name": "Gaming" },
+      { "code": "Books, Apps & Media", "display_name": "Books, Apps & Media" },
+      { "code": "News & Publications", "display_name": "News & Publications" },
+      { "code": "Hobbies & Leisure", "display_name": "Hobbies & Leisure" },
+      { "code": "Cloud & Software Subscriptions", "display_name": "Cloud & Software Subscriptions" }
+    ]
+  },
+  {
+    "code": "Education & Childcare",
+    "display_name": "Education & Childcare",
+    "children": [
+      { "code": "Tuition & School Fees", "display_name": "Tuition & School Fees" },
+      { "code": "Books & Supplies", "display_name": "Books & Supplies" },
+      { "code": "Courses & Certifications", "display_name": "Courses & Certifications" },
+      { "code": "Childcare & Babysitting", "display_name": "Childcare & Babysitting" },
+      { "code": "School Activities & Lunch", "display_name": "School Activities & Lunch" }
+    ]
+  },
+  {
+    "code": "Travel",
+    "display_name": "Travel",
+    "children": [
+      { "code": "Flights", "display_name": "Flights" },
+      { "code": "Lodging", "display_name": "Lodging" },
+      { "code": "Local Transport", "display_name": "Local Transport" },
+      { "code": "Travel Meals & Dining", "display_name": "Travel Meals & Dining" },
+      { "code": "Activities & Tours", "display_name": "Activities & Tours" },
+      { "code": "Baggage/Other Travel Fees", "display_name": "Baggage/Other Travel Fees" }
+    ]
+  },
+  {
+    "code": "Gifts & Donations",
+    "display_name": "Gifts & Donations",
+    "children": [
+      { "code": "Gifts Given", "display_name": "Gifts Given" },
+      { "code": "Charitable Donations", "display_name": "Charitable Donations" },
+      { "code": "Religious Giving", "display_name": "Religious Giving" },
+      { "code": "Crowdfunding Support", "display_name": "Crowdfunding Support" }
+    ]
+  },
+  {
+    "code": "Taxes & Government",
+    "display_name": "Taxes & Government",
+    "children": [
+      { "code": "Federal Income Tax", "display_name": "Federal Income Tax" },
+      { "code": "State/Local Income Tax", "display_name": "State/Local Income Tax" },
+      { "code": "Property Tax", "display_name": "Property Tax" },
+      { "code": "Sales/Use Tax (Standalone)", "display_name": "Sales/Use Tax (Standalone)" },
+      { "code": "DMV & Registration", "display_name": "DMV & Registration" },
+      { "code": "Fines & Tickets", "display_name": "Fines & Tickets" },
+      { "code": "Customs & Duties", "display_name": "Customs & Duties" }
+    ]
+  },
+  {
+    "code": "Banking Movements (Transfers, Refunds & Fees)",
+    "display_name": "Banking Movements (Transfers, Refunds & Fees)",
+    "children": [
+      { "code": "Transfer: Own Accounts", "display_name": "Transfer: Own Accounts" },
+      { "code": "Transfer: External (P2P)", "display_name": "Transfer: External (P2P)" },
+      { "code": "Credit Card Payment", "display_name": "Credit Card Payment" },
+      { "code": "Cash Withdrawal (ATM)", "display_name": "Cash Withdrawal (ATM)" },
+      { "code": "Cash Deposit", "display_name": "Cash Deposit" },
+      { "code": "Check Payment/Deposit", "display_name": "Check Payment/Deposit" },
+      { "code": "Refund/Chargeback", "display_name": "Refund/Chargeback" },
+      { "code": "Reversal/Correction", "display_name": "Reversal/Correction" },
+      { "code": "Bank Fee/Service Charge", "display_name": "Bank Fee/Service Charge" }
+    ]
+  }
+]

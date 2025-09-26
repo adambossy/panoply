@@ -246,9 +246,68 @@ def prompt_new_category_name(
     return sess.prompt(message, default=initial, validator=_V(), validate_while_typing=False)
 
 
+TOP_LEVEL_SENTINEL = "— Create as top-level —"
+
+
+def prompt_select_parent(
+    parents: Sequence[str],
+    *,
+    session: PromptSession | None = None,
+    message: str = "Choose parent (or '— Create as top-level —'): ",
+) -> str | None:
+    """Prompt for a parent category among the provided names.
+
+    Returns the chosen parent name, or ``TOP_LEVEL_SENTINEL`` to indicate a
+    top-level category. Esc cancels and returns ``None``.
+    """
+
+    kb = KeyBindings()
+
+    @kb.add("escape")
+    def _(event) -> None:  # pragma: no cover - exercised indirectly
+        event.app.exit(result=None)
+
+    words = [TOP_LEVEL_SENTINEL] + list(parents)
+    # Map lowercased input to canonical option values for normalization
+    canonical = {w.lower(): w for w in words}
+    allowed_lower = set(canonical.keys())
+    completer = WordCompleter(words, ignore_case=True, match_middle=True, sentence=False)
+
+    class _ParentValidator(Validator):
+        def __init__(self, allowed_lower: set[str]) -> None:
+            self._allowed_lower = allowed_lower
+
+        def validate(self, document) -> None:
+            if document.text.lower() not in self._allowed_lower:
+                raise ValidationError(
+                    message="Select a parent from the list or keep the top-level option."
+                )
+
+    if session is None:
+        sess: PromptSession = PromptSession(key_bindings=kb)
+    else:
+        sess = PromptSession(
+            input=getattr(session, "input", None),
+            output=getattr(session, "output", None),
+            key_bindings=kb,
+        )
+
+    value = sess.prompt(
+        message,
+        default=TOP_LEVEL_SENTINEL,
+        completer=completer,
+        validator=_ParentValidator(allowed_lower),
+        validate_while_typing=False,
+    )
+    # Normalize to the canonical option (including the sentinel)
+    return canonical.get(value.lower(), value)
+
+
 __all__ = [
     "select_category_or_create",
     "prompt_new_category_name",
+    "prompt_select_parent",
     "CreateCategoryRequest",
     "CREATE_SENTINEL",
+    "TOP_LEVEL_SENTINEL",
 ]
