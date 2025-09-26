@@ -322,7 +322,7 @@ def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
     verb, prep = _intent_from_amount(amount_raw)
 
     name_raw = tx.get("merchant") or tx.get("description") or ""
-    name = (str(name_raw).strip() or "unknown merchant")
+    name = str(name_raw).strip() or "unknown merchant"
 
     date_raw = tx.get("date")
     date = (str(date_raw).strip() if date_raw is not None else "").strip() or "unknown date"
@@ -386,8 +386,7 @@ def _render_group_context(
 def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> list[str]:
     """Format duplicate sample rows once to avoid repetition at call sites."""
     return [
-        _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-        for cat, rec in db_dupes
+        _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]") for cat, rec in db_dupes
     ]
 
 
