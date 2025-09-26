@@ -27,7 +27,7 @@ def upgrade() -> None:
     op.add_column(
         "fa_transactions",
         sa.Column(
-            "display_name_source", sa.Text(), nullable=False, server_default=sa.text("'unknown'")
+            "display_name_source", sa.String(), nullable=False, server_default=sa.text("'unknown'")
         ),
     )
     op.add_column(

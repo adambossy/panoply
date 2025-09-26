@@ -133,6 +133,7 @@ def upsert_transactions(
             "merchant": merchant,
             "memo": memo,
             "display_name": display_name,
+            "display_name_source": "import",
             "updated_at": now,
         }
         if external_id is not None:
