@@ -259,6 +259,33 @@ def _print_rows_block(
         print_fn(f"  +{extra} more")
 
 
+def _fmt_amount(value: Any) -> str:
+    try:
+        v = float(str(value).replace(",", "").strip())
+    except Exception:  # pragma: no cover - defensive
+        return f"${value}"
+    sign = "-" if v < 0 else ""
+    return f"{sign}${abs(v):,.2f}"
+
+
+def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
+    """Return (headline, id_line) for a friendly one-transaction summary.
+
+    Example:
+        ("$11.18 spent at `UBER` on 2025-08-29",
+         "ID = 320252410422442649.")
+    """
+    amount = _fmt_amount(tx.get("amount"))
+    name_raw = tx.get("merchant") or tx.get("description") or ""
+    name = str(name_raw).strip()
+    date_raw = tx.get("date")
+    date = str(date_raw).strip() if date_raw is not None else ""
+    eid = tx.get("id") or ""
+    headline = f"{amount} spent at `{name}` on {date}"
+    id_line = f"ID = {eid}."
+    return headline, id_line
+
+
 def _render_group_context(
     *,
     group_items: list[_PreparedItem],
@@ -266,17 +293,39 @@ def _render_group_context(
     exemplars: int,
     print_fn: Callable[..., None],
 ) -> None:
-    """Render the input group and any DB duplicate examples.
+    """Render the input group and any DB duplicate examples using a friendly style."""
 
-    Keeps user‑facing formatting and messages unchanged.
-    """
-    input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
-    _print_rows_block(
-        "Input group (date\tamount\tdesc/merchant\tid):",
-        input_rows,
-        exemplars=exemplars,
-        print_fn=print_fn,
-    )
+    # Friendly, human-readable summaries. When the group is a single item,
+    # inline the "no duplicates" message on the ID line to match the desired UX.
+    if len(group_items) == 1:
+        tx = group_items[0].tx
+        headline, id_line = _fmt_tx_summary(tx)
+        print_fn(headline)
+        if db_dupes:
+            print_fn(id_line)
+            dup_rows = [
+                _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
+                for cat, rec in db_dupes
+            ]
+            _print_rows_block(
+                "DB duplicates (first matches shown):",
+                dup_rows,
+                exemplars=exemplars,
+                print_fn=print_fn,
+            )
+        else:
+            print_fn(id_line + " No DB duplicates matched.")
+        print_fn("")  # blank line after the group block
+        return
+
+    # Multi-item group: list each item compactly, then show group-level dup info
+    for prep in group_items[:exemplars]:
+        headline, id_line = _fmt_tx_summary(prep.tx)
+        print_fn(headline)
+        print_fn(id_line)
+    extra = len(group_items) - min(len(group_items), exemplars)
+    if extra > 0:
+        print_fn(f"+{extra} more in this group")
 
     if db_dupes:
         dup_rows = [
@@ -291,6 +340,7 @@ def _render_group_context(
         )
     else:
         print_fn("No DB duplicates matched for this group.")
+    print_fn("")
 
 
 # ----------------------------------------------------------------------------

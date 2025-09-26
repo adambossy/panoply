@@ -312,6 +312,9 @@ def cmd_review_transaction_categories(
     import csv
     import os
     import sys
+    import time
+    from pathlib import Path
+    import logging
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -321,6 +324,7 @@ def cmd_review_transaction_categories(
     from .api import categorize_expenses, review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+    from .logging_setup import get_logger
 
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
@@ -366,9 +370,24 @@ def cmd_review_transaction_categories(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Categorize to get suggestions
+    # Categorize to get suggestions with friendlier UX (suppress verbose logs)
     try:
-        suggestions = list(categorize_expenses(ctv_items))
+        total = len(ctv_items)
+        filename = Path(csv_path).name
+        print()
+        print(f"Categorizing {total} transactions in {filename}...")
+
+        pkg_logger = get_logger("financial_analysis")
+        prev_level = pkg_logger.level
+        pkg_logger.setLevel(logging.WARNING)
+        t0 = time.perf_counter()
+        try:
+            suggestions = list(categorize_expenses(ctv_items))
+        finally:
+            pkg_logger.setLevel(prev_level)
+        dt = time.perf_counter() - t0
+        print(f"Finished categorizing {total} transactions ({dt:.2f}s)")
+        print()
     except Exception as e:
         print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
         return 1
