@@ -651,7 +651,7 @@ def review_transaction_categories(
                 final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
 
             session.commit()
-            print_fn("Saved.")
+            print_fn("Saved.\n")
 
     return final
 
