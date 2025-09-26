@@ -312,6 +312,8 @@ def cmd_review_transaction_categories(
     import csv
     import os
     import sys
+    import time
+    from pathlib import Path
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -366,9 +368,18 @@ def cmd_review_transaction_categories(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Categorize to get suggestions
+    # Categorize to get suggestions with friendlier UX (suppress verbose logs)
     try:
+        total = len(ctv_items)
+        filename = Path(csv_path).name
+        print()
+        print(f"Categorizing {total} transactions in {filename}...")
+
+        t0 = time.perf_counter()
         suggestions = list(categorize_expenses(ctv_items))
+        dt = time.perf_counter() - t0
+        print(f"Finished categorizing {total} transactions ({dt:.2f}s)")
+        print()
     except Exception as e:
         print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
         return 1

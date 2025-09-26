@@ -287,6 +287,81 @@ def _print_rows_block(
         print_fn(f"  +{extra} more")
 
 
+def _fmt_amount(value: Any) -> str:
+    try:
+        v = float(str(value).replace(",", "").strip())
+    except Exception:  # pragma: no cover - defensive
+        return f"${value}"
+    sign = "-" if v < 0 else ""
+    return f"{sign}${abs(v):,.2f}"
+
+
+def _normalize_amount_str(value: Any) -> str:
+    """Normalize an amount to a simple numeric string with an optional leading '-'.
+
+    - Strips commas and a leading '$' if present.
+    - Converts accounting parentheses into a leading '-'.
+    - Preserves a single leading '-' if present after normalization.
+    """
+    s = str(value).strip()
+    s = s.replace(",", "")
+    if s.startswith("$"):
+        s = s[1:].strip()
+    if s.startswith("(") and s.endswith(")") and len(s) >= 2:
+        inner = s[1:-1].strip()
+        if inner.startswith("$"):
+            inner = inner[1:].strip()
+        s = f"-{inner}"
+    return s
+
+
+def _is_negative_amount(value: Any) -> bool:
+    """Best-effort negativity check that tolerates strings and accounting style."""
+    s = _normalize_amount_str(value)
+    return s.startswith("-")
+
+
+def _fmt_abs_amount(value: Any) -> str:
+    """Format an amount without its sign for headline readability."""
+    s = _normalize_amount_str(value)
+    try:
+        v = float(s)
+        return f"${abs(v):,.2f}"
+    except Exception:  # pragma: no cover - defensive
+        # Ensure no double '$' and drop any leading '-'
+        return f"${s.lstrip('-').lstrip('$')}"
+
+
+def _intent_from_amount(value: Any) -> tuple[str, str]:
+    """Map amount sign to intent (verb, preposition).
+
+    Assumes normalized sign semantics: negative = spend/outflow, non-negative =
+    income/inflow. If different connectors use different conventions, that
+    should be normalized during ingestion so presentation stays consistent.
+    """
+    neg = _is_negative_amount(value)
+    return ("spent", "at") if neg else ("received", "from")
+
+
+def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
+    """Return (headline, id_line) for a concise one-transaction summary."""
+    amount_raw = tx.get("amount")
+    amount = _fmt_abs_amount(amount_raw)
+    verb, prep = _intent_from_amount(amount_raw)
+
+    name_raw = tx.get("merchant") or tx.get("description") or ""
+    name = str(name_raw).strip() or "unknown merchant"
+
+    date_raw = tx.get("date")
+    date = (str(date_raw).strip() if date_raw is not None else "").strip() or "unknown date"
+
+    eid = str(tx.get("id") or "unknown")
+
+    headline = f"{amount} {verb} {prep} `{name}` on {date}"
+    id_line = f"ID = {eid}."
+    return headline, id_line
+
+
 def _render_group_context(
     *,
     group_items: list[_PreparedItem],
@@ -294,31 +369,53 @@ def _render_group_context(
     exemplars: int,
     print_fn: Callable[..., None],
 ) -> None:
-    """Render the input group and any DB duplicate examples.
+    """Render the input group and any DB duplicate examples using a friendly style."""
 
-    Keeps user‑facing formatting and messages unchanged.
-    """
-    input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
-    _print_rows_block(
-        "Input group (date\tamount\tdesc/merchant\tid):",
-        input_rows,
-        exemplars=exemplars,
-        print_fn=print_fn,
-    )
+    # Friendly, human-readable summaries. When the group is a single item,
+    # inline the "no duplicates" message on the ID line to match the desired UX.
+    if len(group_items) == 1:
+        tx = group_items[0].tx
+        headline, id_line = _fmt_tx_summary(tx)
+        print_fn(headline)
+        if db_dupes:
+            print_fn(id_line)
+            _print_rows_block(
+                "DB duplicates (first matches shown):",
+                _format_dup_rows(db_dupes),
+                exemplars=exemplars,
+                print_fn=print_fn,
+            )
+        else:
+            print_fn(id_line + " No DB duplicates matched.")
+        print_fn("")  # blank line after the group block
+        return
+
+    # Multi-item group: list each item compactly, then show group-level dup info
+    for prep in group_items[:exemplars]:
+        headline, id_line = _fmt_tx_summary(prep.tx)
+        print_fn(headline)
+        print_fn(id_line)
+    extra = len(group_items) - min(len(group_items), exemplars)
+    if extra > 0:
+        print_fn(f"+{extra} more in this group")
 
     if db_dupes:
-        dup_rows = [
-            _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-            for cat, rec in db_dupes
-        ]
         _print_rows_block(
             "DB duplicates (first matches shown):",
-            dup_rows,
+            _format_dup_rows(db_dupes),
             exemplars=exemplars,
             print_fn=print_fn,
         )
     else:
         print_fn("No DB duplicates matched for this group.")
+    print_fn("")
+
+
+def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> list[str]:
+    """Format duplicate sample rows once to avoid repetition at call sites."""
+    return [
+        _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]") for cat, rec in db_dupes
+    ]
 
 
 # ----------------------------------------------------------------------------
@@ -652,6 +749,7 @@ def review_transaction_categories(
 
             session.commit()
             print_fn("Saved.")
+            print_fn("")
 
     return final
 
