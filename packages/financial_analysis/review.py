@@ -9,6 +9,7 @@ preparation, grouping, querying, prompting, and persistence.
 from __future__ import annotations
 
 import builtins
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -77,6 +78,23 @@ def _materialize_and_prepare(
     return items, prepared
 
 
+def _norm_merchant_key(tx: Mapping[str, Any]) -> str | None:
+    """Return a case/whitespace‑insensitive key for grouping by merchant.
+
+    Falls back to ``description`` when ``merchant`` is missing/empty. Collapses
+    internal whitespace to a single space and lower‑cases the result. Returns
+    ``None`` when neither field is present.
+    """
+    raw = tx.get("merchant") or tx.get("description")
+    if raw is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(raw)).strip()
+    if not s:
+        return None
+    # Collapse internal whitespace (including newlines/tabs) and case‑fold
+    return " ".join(s.split()).casefold()
+
+
 class _DisjointSet:
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
@@ -95,30 +113,38 @@ class _DisjointSet:
 
 
 def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
-    """Build connectivity groups over indices by external_id OR fingerprint."""
+    """Group indices by normalized merchant/description; no legacy fallback.
 
-    n = len(prepared)
-    dsu = _DisjointSet(n)
+    New behavior (per issue #44):
+    - Items sharing the same normalized merchant (or, when merchant is empty,
+      the same normalized description) are grouped together, regardless of
+      differing ids, amounts, or dates.
+    - When both merchant and description are empty, each item forms its own
+      singleton group (we do not merge by external id or fingerprint).
+    """
 
-    by_eid: defaultdict[str, list[int]] = defaultdict(list)
-    by_fp: defaultdict[str, list[int]] = defaultdict(list)
+    # Primary: group by normalized merchant/description key
+    by_merch: defaultdict[str, list[int]] = defaultdict(list)
+    # Track items without a merchant/description key; they become singletons
+    fallback_idxs: list[int] = []
+
     for i, prep in enumerate(prepared):
-        if prep.external_id is not None:
-            by_eid[prep.external_id].append(i)
-        by_fp[prep.fingerprint].append(i)
+        key = _norm_merchant_key(prep.tx)
+        if key is None:
+            fallback_idxs.append(i)
+        else:
+            by_merch[key].append(i)
 
-    for _k, idxs in by_eid.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
-    for _k, idxs in by_fp.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
+    # Start with merchant-based groups, assigning deterministic roots
+    groups_map: dict[int, list[int]] = {}
+    for idxs in by_merch.values():
+        root = min(idxs)
+        groups_map[root] = sorted(idxs)
 
-    groups_map: defaultdict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        groups_map[dsu.find(i)].append(i)
+    # Items without a key: emit as singletons with deterministic roots
+    for i in fallback_idxs:
+        groups_map[i] = [i]
+
     return groups_map
 
 
@@ -308,6 +334,81 @@ def _print_rows_block(
         print_fn(f"  +{extra} more")
 
 
+def _fmt_amount(value: Any) -> str:
+    try:
+        v = float(str(value).replace(",", "").strip())
+    except Exception:  # pragma: no cover - defensive
+        return f"${value}"
+    sign = "-" if v < 0 else ""
+    return f"{sign}${abs(v):,.2f}"
+
+
+def _normalize_amount_str(value: Any) -> str:
+    """Normalize an amount to a simple numeric string with an optional leading '-'.
+
+    - Strips commas and a leading '$' if present.
+    - Converts accounting parentheses into a leading '-'.
+    - Preserves a single leading '-' if present after normalization.
+    """
+    s = str(value).strip()
+    s = s.replace(",", "")
+    if s.startswith("$"):
+        s = s[1:].strip()
+    if s.startswith("(") and s.endswith(")") and len(s) >= 2:
+        inner = s[1:-1].strip()
+        if inner.startswith("$"):
+            inner = inner[1:].strip()
+        s = f"-{inner}"
+    return s
+
+
+def _is_negative_amount(value: Any) -> bool:
+    """Best-effort negativity check that tolerates strings and accounting style."""
+    s = _normalize_amount_str(value)
+    return s.startswith("-")
+
+
+def _fmt_abs_amount(value: Any) -> str:
+    """Format an amount without its sign for headline readability."""
+    s = _normalize_amount_str(value)
+    try:
+        v = float(s)
+        return f"${abs(v):,.2f}"
+    except Exception:  # pragma: no cover - defensive
+        # Ensure no double '$' and drop any leading '-'
+        return f"${s.lstrip('-').lstrip('$')}"
+
+
+def _intent_from_amount(value: Any) -> tuple[str, str]:
+    """Map amount sign to intent (verb, preposition).
+
+    Assumes normalized sign semantics: negative = spend/outflow, non-negative =
+    income/inflow. If different connectors use different conventions, that
+    should be normalized during ingestion so presentation stays consistent.
+    """
+    neg = _is_negative_amount(value)
+    return ("spent", "at") if neg else ("received", "from")
+
+
+def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
+    """Return (headline, id_line) for a concise one-transaction summary."""
+    amount_raw = tx.get("amount")
+    amount = _fmt_abs_amount(amount_raw)
+    verb, prep = _intent_from_amount(amount_raw)
+
+    name_raw = tx.get("merchant") or tx.get("description") or ""
+    name = str(name_raw).strip() or "unknown merchant"
+
+    date_raw = tx.get("date")
+    date = (str(date_raw).strip() if date_raw is not None else "").strip() or "unknown date"
+
+    eid = str(tx.get("id") or "unknown")
+
+    headline = f"{amount} {verb} {prep} `{name}` on {date}"
+    id_line = f"ID = {eid}."
+    return headline, id_line
+
+
 def _render_group_context(
     *,
     group_items: list[_PreparedItem],
@@ -315,31 +416,53 @@ def _render_group_context(
     exemplars: int,
     print_fn: Callable[..., None],
 ) -> None:
-    """Render the input group and any DB duplicate examples.
+    """Render the input group and any DB duplicate examples using a friendly style."""
 
-    Keeps user‑facing formatting and messages unchanged.
-    """
-    input_rows = [_fmt_tx_row(prep.tx) for prep in group_items]
-    _print_rows_block(
-        "Input group (date\tamount\tdesc/merchant\tid):",
-        input_rows,
-        exemplars=exemplars,
-        print_fn=print_fn,
-    )
+    # Friendly, human-readable summaries. When the group is a single item,
+    # inline the "no duplicates" message on the ID line to match the desired UX.
+    if len(group_items) == 1:
+        tx = group_items[0].tx
+        headline, id_line = _fmt_tx_summary(tx)
+        print_fn(headline)
+        if db_dupes:
+            print_fn(id_line)
+            _print_rows_block(
+                "DB duplicates (first matches shown):",
+                _format_dup_rows(db_dupes),
+                exemplars=exemplars,
+                print_fn=print_fn,
+            )
+        else:
+            print_fn(id_line + " No DB duplicates matched.")
+        print_fn("")  # blank line after the group block
+        return
+
+    # Multi-item group: list each item compactly, then show group-level dup info
+    for prep in group_items[:exemplars]:
+        headline, id_line = _fmt_tx_summary(prep.tx)
+        print_fn(headline)
+        print_fn(id_line)
+    extra = len(group_items) - min(len(group_items), exemplars)
+    if extra > 0:
+        print_fn(f"+{extra} more in this group")
 
     if db_dupes:
-        dup_rows = [
-            _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]")
-            for cat, rec in db_dupes
-        ]
         _print_rows_block(
             "DB duplicates (first matches shown):",
-            dup_rows,
+            _format_dup_rows(db_dupes),
             exemplars=exemplars,
             print_fn=print_fn,
         )
     else:
         print_fn("No DB duplicates matched for this group.")
+    print_fn("")
+
+
+def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> list[str]:
+    """Format duplicate sample rows once to avoid repetition at call sites."""
+    return [
+        _fmt_tx_row(rec) + (f"\t[{cat}]" if cat else "\t[uncategorized]") for cat, rec in db_dupes
+    ]
 
 
 # ----------------------------------------------------------------------------
@@ -554,15 +677,17 @@ def review_transaction_categories(
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
     allow_create: bool | None = None,
+    auto_confirm_dupes: bool = False,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
     Behavior
     --------
-    - Group input transactions into duplicate groups where two items are in the
-      same group if they share the same external id (``transaction['id']``) OR
-      the same fingerprint (``compute_fingerprint``). Fingerprinting uses the
-      provided ``source_provider`` as context.
+    - Group input transactions primarily by a normalized merchant key. Two
+      items are in the same group when their ``merchant`` values match ignoring
+      case and internal whitespace. When ``merchant`` is empty/missing, the
+      ``description`` field is used for the key. If both are empty, each item
+      is treated as its own group (no merging by id/fingerprint).
     - For each group, query DB duplicates in ``fa_transactions`` matching the
       same ``(source_provider, source_account)`` and either any group external
       id or any group fingerprint.
@@ -609,7 +734,17 @@ def review_transaction_categories(
         return []
 
     groups_map = _build_groups(prepared)
+    # Precompute a map from normalized merchant/description key -> positions.
+    # Duplicate identity for this session is based on this key (see issue #48).
+    by_key: dict[str, list[int]] = defaultdict(list)
+    for i, prep in enumerate(prepared):
+        k = _norm_merchant_key(prep.tx)
+        if k is not None:
+            by_key[k].append(i)
     final: list[CategorizedTransaction] = list(items)
+    # Track positions already finalized via duplicate auto-apply to support
+    # future scenarios where duplicates may span groups.
+    assigned: set[int] = set()
 
     with session_scope(database_url=database_url) as session:
         allowed = _load_allowed_categories(session)
@@ -621,7 +756,14 @@ def review_transaction_categories(
 
         for root in group_roots:
             idxs = groups_map[root]
-            group_items = [prepared[i] for i in idxs]
+            # Skip or filter groups when some positions were already assigned
+            # as duplicates of an earlier decision in this session.
+            remaining = [i for i in idxs if i not in assigned]
+            if not remaining:
+                # A future group fully covered by earlier duplicate handling.
+                print_fn("Duplicate(s) — skipping.")
+                continue
+            group_items = [prepared[i] for i in remaining]
 
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
@@ -682,8 +824,82 @@ def review_transaction_categories(
             for prep in group_items:
                 final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
 
+            # Commit the primary group immediately to avoid rolling it back if
+            # duplicate persistence fails later.
             session.commit()
             print_fn("Saved.")
+
+            # Session-duplicate handling (based on merchant/description key)
+            # Look ahead for any remaining items whose normalized key matches
+            # any item in this group. Offer to apply the chosen category to all
+            # such duplicates now and skip their later review.
+            group_keys = {
+                k for k in (_norm_merchant_key(p.tx) for p in group_items) if k is not None
+            }
+            dupe_positions: list[int] = []
+            # Precompute set/max for O(1) membership and to avoid repeated max()
+            remaining_set = set(remaining)
+            last_idx = max(remaining)  # non-empty by construction
+            for k in group_keys:
+                for pos in by_key.get(k, []):
+                    if pos in assigned or pos in remaining_set:
+                        continue
+                    # Only consider items that appear later in the queue (by pos)
+                    # to match the "look ahead" behavior; equal/earlier positions
+                    # are either part of this group or already processed.
+                    if pos > last_idx:
+                        dupe_positions.append(pos)
+            # De‑duplicate while preserving order (readable explicit loop)
+            seen: set[int] = set()
+            unique_dupe_positions: list[int] = []
+            for p in dupe_positions:
+                if p not in seen:
+                    seen.add(p)
+                    unique_dupe_positions.append(p)
+            dupe_positions = unique_dupe_positions
+
+            if dupe_positions:
+                # Render a complete list per the requested copy
+                print_fn("Session duplicates (all matches):")
+                for pos in dupe_positions:
+                    print_fn(f"  {_fmt_tx_row(prepared[pos].tx)}")
+                # Prompt to apply now (default Yes) unless auto-confirm is set
+                if auto_confirm_dupes:
+                    choice_yes = True
+                else:
+                    prompt = (
+                        f"Apply '{final_cat}' to these {len(dupe_positions)} duplicates "
+                        "and skip their review? [Y/n]: "
+                    )
+                    resp = input_fn(prompt).strip().lower()
+                    choice_yes = resp in {"", "y", "yes"}
+
+                if choice_yes:
+                    dupe_items = [prepared[p] for p in dupe_positions]
+                    try:
+                        _persist_group(
+                            session,
+                            source_provider=source_provider,
+                            source_account=source_account,
+                            group_items=dupe_items,
+                            final_cat=final_cat,
+                        )
+                        # Commit first to guarantee persistence before mutating in-memory state
+                        session.commit()
+                    except Exception as e:  # pragma: no cover - defensive
+                        session.rollback()
+                        print_fn(f"Warning: failed to persist duplicates: {e}")
+                    else:
+                        for p in dupe_positions:
+                            assigned.add(p)
+                            # Index into final by the canonical position, not the prepared index
+                            final[prepared[p].pos] = CategorizedTransaction(
+                                transaction=prepared[p].tx, category=final_cat
+                            )
+                        print_fn("Saved duplicates.")
+
+            # Blank line after handling this group (and any duplicates)
+            print_fn("")
 
     return final
 
