@@ -9,6 +9,7 @@ preparation, grouping, querying, prompting, and persistence.
 from __future__ import annotations
 
 import builtins
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -76,6 +77,23 @@ def _materialize_and_prepare(
     return items, prepared
 
 
+def _norm_merchant_key(tx: Mapping[str, Any]) -> str | None:
+    """Return a case/whitespace‑insensitive key for grouping by merchant.
+
+    Falls back to ``description`` when ``merchant`` is missing/empty. Collapses
+    internal whitespace to a single space and lower‑cases the result. Returns
+    ``None`` when neither field is present.
+    """
+    raw = tx.get("merchant") or tx.get("description")
+    if raw is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(raw)).strip()
+    if not s:
+        return None
+    # Collapse internal whitespace (including newlines/tabs) and case‑fold
+    return " ".join(s.split()).casefold()
+
+
 class _DisjointSet:
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
@@ -94,30 +112,38 @@ class _DisjointSet:
 
 
 def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
-    """Build connectivity groups over indices by external_id OR fingerprint."""
+    """Group indices by normalized merchant/description; no legacy fallback.
 
-    n = len(prepared)
-    dsu = _DisjointSet(n)
+    New behavior (per issue #44):
+    - Items sharing the same normalized merchant (or, when merchant is empty,
+      the same normalized description) are grouped together, regardless of
+      differing ids, amounts, or dates.
+    - When both merchant and description are empty, each item forms its own
+      singleton group (we do not merge by external id or fingerprint).
+    """
 
-    by_eid: defaultdict[str, list[int]] = defaultdict(list)
-    by_fp: defaultdict[str, list[int]] = defaultdict(list)
+    # Primary: group by normalized merchant/description key
+    by_merch: defaultdict[str, list[int]] = defaultdict(list)
+    # Track items without a merchant/description key; they become singletons
+    fallback_idxs: list[int] = []
+
     for i, prep in enumerate(prepared):
-        if prep.external_id is not None:
-            by_eid[prep.external_id].append(i)
-        by_fp[prep.fingerprint].append(i)
+        key = _norm_merchant_key(prep.tx)
+        if key is None:
+            fallback_idxs.append(i)
+        else:
+            by_merch[key].append(i)
 
-    for _k, idxs in by_eid.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
-    for _k, idxs in by_fp.items():
-        base = idxs[0]
-        for j in idxs[1:]:
-            dsu.union(base, j)
+    # Start with merchant-based groups, assigning deterministic roots
+    groups_map: dict[int, list[int]] = {}
+    for idxs in by_merch.values():
+        root = min(idxs)
+        groups_map[root] = sorted(idxs)
 
-    groups_map: defaultdict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        groups_map[dsu.find(i)].append(i)
+    # Items without a key: emit as singletons with deterministic roots
+    for i in fallback_idxs:
+        groups_map[i] = [i]
+
     return groups_map
 
 
@@ -512,10 +538,11 @@ def review_transaction_categories(
 
     Behavior
     --------
-    - Group input transactions into duplicate groups where two items are in the
-      same group if they share the same external id (``transaction['id']``) OR
-      the same fingerprint (``compute_fingerprint``). Fingerprinting uses the
-      provided ``source_provider`` as context.
+    - Group input transactions primarily by a normalized merchant key. Two
+      items are in the same group when their ``merchant`` values match ignoring
+      case and internal whitespace. When ``merchant`` is empty/missing, the
+      ``description`` field is used for the key. If both are empty, each item
+      is treated as its own group (no merging by id/fingerprint).
     - For each group, query DB duplicates in ``fa_transactions`` matching the
       same ``(source_provider, source_account)`` and either any group external
       id or any group fingerprint.
