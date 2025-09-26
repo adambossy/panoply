@@ -29,9 +29,17 @@ Core style principles
   - Layer abstractions cleanly (e.g., transport, serialization, error handling).
   - Define a repository-specific root exception (e.g., `AppError`) in a shared `errors.py` and derive specific subtypes per domain.
   - Do not raise bare `Exception`. Wrap external exceptions and raise `AppError` subclasses so the public surface exposes a consistent error taxonomy.
+  - When wrapping external exceptions, chain the original using `raise ... from e` to preserve the cause and traceback. For example, raise a domain-specific subclass of `AppError`:
+
+    ```py
+    try:
+        do_the_thing()
+    except ExternalError as e:
+        raise DomainOperationError("Failed to do the thing") from e
+    ```
 - Maintainability and process hygiene
   - Pair features with tests and documentation.
-  - Use linters/formatters and pre-commit to enforce consistency. Standard tools: Ruff (lint + format) configured via `pyproject.toml`; MyPy for type checking; PyTest for tests; `pre-commit` for local hooks.
+  - Use the tools configured in `pyproject.toml` (e.g., Ruff for lint/format if present), mypy for type checking, pytest for tests, and pre-commit for hooks.
   - Refactor continuously; eliminate duplication and accidental complexity.
   - Prefer small, purposeful commits with clear messages.
 
@@ -40,7 +48,16 @@ Readability
 - Normalize inputs and precompute early when feasible; preserve original order. When performing rewrite/transformation workflows, keep a stable index (e.g., `pos`) to ensure determinism.
 - Group with simple, explicit data structures. Prefer sets, dicts, and lists with clear loops over clever one-liners; introduce specialized structures only when they improve clarity.
 - Prefer early returns and small loops over deep nesting. Short-circuit empties and error cases as soon as they are known.
-- Inject I/O for testability. Accept `print_fn`, `input_fn`, or a selector callback; default to `builtins` and avoid capturing patched builtins at import time.
+- Inject I/O for testability. Accept `print_fn`, `input_fn`, or a selector callback; avoid capturing patched builtins at import time. Do not bind builtins as default parameter values—default to `None` and assign inside the function body. For example:
+
+  ```py
+  def prompt(*, input_fn=None, print_fn=None):
+      if input_fn is None:
+          input_fn = input
+      if print_fn is None:
+          print_fn = print
+      # use input_fn / print_fn below
+  ```
 - Validate early with precise errors that include the actual type (e.g., `...; got {type_name}`) for injected callbacks and external inputs.
 - Keep user-facing prints short and actionable. Use sentence case, minimal punctuation, and introduce lists with a colon.
 - Document non-obvious formatting or ordering choices in a short inline comment near the code that depends on them.
