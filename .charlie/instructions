@@ -67,6 +67,7 @@ Naming
 - Use module-private helpers for internals and expose a minimal public API. Prefix internals with a single underscore and (optionally) export the public surface via `__all__`.
 - Prefer keyword-only parameters for helpers with multiple arguments or boolean flags. Use `*,` after the primary subject to force clarity at call sites. Avoid boolean flags that change behavior; prefer an `Enum` or strategy object to represent modes.
 - Use short, conventional abbreviations only when the context is obvious (e.g., `tx` for transaction, `eid` for external id, `fp` for fingerprint, `pos` for original index). Otherwise, spell names out.
+- Avoid single-letter variable names in new code; choose intention-revealing names instead (e.g., `idx`, `row`, `item`, `count`). Narrow exceptions are allowed in short, self-contained scopes for domain-standard mathematical symbols and widely understood local conventions (e.g., `i`/`j` for algorithmic indices, `x`/`y` for coordinates, `k`/`v` in a one-liner dict comprehension, `n` for sample size). Prefer `idx`/`pos` over `i`/`j` in general-purpose loops.
 - Adopt consistent, intention-revealing prefixes:
   - `group_*` for data scoped to the current duplicate group (e.g., `group_items`, `group_eids`).
   - `db_*` for values sourced from the database (e.g., `db_dupes`).
