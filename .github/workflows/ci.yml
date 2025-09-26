@@ -83,6 +83,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
+          # Do not leave the workflow token in the repo; the commit step will provide its own token.
+          persist-credentials: false
 
       - name: Set up Python (from .python-version)
         uses: actions/setup-python@v5
@@ -114,6 +116,7 @@ jobs:
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
           branch: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   format_check:
     name: Format check • Ubuntu
