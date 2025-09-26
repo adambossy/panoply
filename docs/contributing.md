@@ -48,7 +48,10 @@ We use Ruff for both linting and formatting.
   ```bash
   uv run pre-commit install
   ```
-  You can also normalize the repo in one go: `uv run ruff format .`.
+  You can also normalize the repo in one go:
+  ```bash
+  uv run ruff check --fix . && uv run ruff format .
+  ```
 
 - CI: pull requests from branches in this repository are auto-formatted. The
   workflow will run `ruff check --fix` + `ruff format` and push a commit before

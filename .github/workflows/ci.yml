@@ -66,27 +66,66 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy .
 
-  format_check:
-    name: Format check • Ubuntu
+  format_autofix_pr:
+    name: Format autofix (PR) • Ubuntu
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: format-${{ github.ref }}
-      cancel-in-progress: true
-    # Allow committing fixes back to PR branches when this job runs on pull_request events.
+    if: ${{ github.event_name == 'pull_request' }}
     permissions:
       contents: write
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
-      - name: Checkout (PR branch)
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+      - name: Checkout (PR head)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
 
-      - name: Checkout (default)
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
+
+      # Attempt to auto-fix formatting and lint issues on same-repo PRs.
+      - name: Run Ruff autofix
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+        continue-on-error: true
+        run: |
+          uv run ruff check --fix .
+          uv run ruff format .
+
+      - name: Commit formatting changes
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+        continue-on-error: true
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(format): apply Ruff fixes"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          branch: ${{ github.event.pull_request.head.ref }}
+
+  format_check:
+    name: Format check • Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python (from .python-version)
@@ -102,28 +141,7 @@ jobs:
       - name: Sync workspace dependencies (locked)
         run: uv sync --locked
 
-      # On PRs from branches within this repository, attempt to auto-fix formatting
-      # and commit back before running the check. Forks are skipped due to token
-      # permissions being read-only.
-      - name: Run Ruff autofix (PRs from this repo only)
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
-        continue-on-error: true
-        run: |
-          uv run ruff check --fix .
-          uv run ruff format .
-
-      - name: Commit formatting changes (PRs from this repo only)
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
-        continue-on-error: true
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore(format): apply Ruff fixes"
-          commit_user_name: github-actions[bot]
-          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
-          branch: ${{ github.event.pull_request.head.ref }}
-
       - name: Format check (ruff)
-        if: ${{ always() }}
         run: uv run ruff format --check .
 
   test:
