@@ -306,8 +306,59 @@ def prompt_select_parent(
 __all__ = [
     "select_category_or_create",
     "prompt_new_category_name",
+    "prompt_new_display_name",
     "prompt_select_parent",
     "CreateCategoryRequest",
     "CREATE_SENTINEL",
     "TOP_LEVEL_SENTINEL",
 ]
+
+
+# ----------------------------------------------------------------------------
+# Display-name prompt (optional rename step)
+# ----------------------------------------------------------------------------
+
+
+def prompt_new_display_name(
+    *,
+    initial: str = "",
+    session: PromptSession | None = None,
+    message: str = "Rename display name (Enter to keep • Esc to cancel): ",
+    error_prefix: str = "",
+) -> str | None:
+    """Collect an optional human-friendly display name with inline validation.
+
+    Behavior
+    --------
+    - Esc cancels and returns ``None``.
+    - Enter on an empty input keeps the current name and returns an empty string
+      (callers typically treat that as "no change").
+    - Non-empty values are validated with the same rules as category names
+      (letters/numbers/space and ``& - /`` only, 1..64 chars).
+    """
+
+    kb = KeyBindings()
+
+    @kb.add("escape")
+    def _(event) -> None:  # pragma: no cover - exercised indirectly
+        event.app.exit(result=None)
+
+    class _V(Validator):
+        def validate(self, document) -> None:
+            # Allow empty input to mean "keep" without validation errors
+            if not document.text.strip():
+                return
+            v = _validate_name(document.text)
+            if not getattr(v, "ok", True):
+                raise ValidationError(message=(error_prefix + (v.reason or "Invalid name")))
+
+    if session is None:
+        sess: PromptSession = PromptSession(key_bindings=kb)
+    else:
+        sess = PromptSession(
+            input=getattr(session, "input", None),
+            output=getattr(session, "output", None),
+            key_bindings=kb,
+        )
+
+    return sess.prompt(message, default=initial, validator=_V(), validate_while_typing=False)

@@ -26,6 +26,7 @@ from .term_ui import (
     TOP_LEVEL_SENTINEL,
     CreateCategoryRequest,
     prompt_new_category_name,
+    prompt_new_display_name,
     prompt_select_parent,
 )
 from .term_ui import (
@@ -195,6 +196,7 @@ def _persist_group(
     source_account: str | None,
     group_items: list[_PreparedItem],
     final_cat: str,
+    display_name: str | None = None,
 ) -> None:
     # Ensure upsert before updates
     upsert_transactions(
@@ -223,6 +225,14 @@ def _persist_group(
         "verified": True,
         "updated_at": now,
     }
+    if display_name is not None and display_name.strip():
+        values.update(
+            {
+                "display_name": display_name.strip(),
+                "display_name_source": "manual",
+                "renamed_at": now,
+            }
+        )
 
     # Apply a single OR condition across the union of identifiers within the provider/account scope
     conds = []
@@ -232,6 +242,43 @@ def _persist_group(
         conds.append(FaTransaction.fingerprint_sha256.in_(fps))
     if conds:
         session.execute(base.where(or_(*conds)).values(**values))
+
+
+def _best_display_name_candidate(group_items: list[_PreparedItem]) -> str:
+    """Return a heuristic initial display-name suggestion for a group.
+
+    Strategy: prefer the first non-empty ``merchant`` across the group's raw
+    records; otherwise fall back to ``description``. Apply a light cleanup to
+    remove characters outside the allowed set (letters/numbers/space/&-/) and
+    collapse internal whitespace.
+    """
+
+    def _pick() -> str:
+        for prep in group_items:
+            tx = prep.tx
+            m = tx.get("merchant")
+            if isinstance(m, str) and m.strip():
+                return m
+        for prep in group_items:
+            tx = prep.tx
+            d = tx.get("description")
+            if isinstance(d, str) and d.strip():
+                return d
+        return ""
+
+    raw = _pick()
+    if not raw:
+        return ""
+
+    # Keep only allowed characters (letters/numbers/space/&-/); replace others with space
+    out_chars: list[str] = []
+    for ch in raw:
+        if ch.isalnum() or ch in {" ", "&", "-", "/"}:
+            out_chars.append(ch)
+        else:
+            out_chars.append(" ")
+    s = " ".join("".join(out_chars).split())
+    return s
 
 
 # ----------------------------------------------------------------------------
@@ -610,6 +657,17 @@ def review_transaction_categories(
                 input_fn=input_fn,
                 print_fn=print_fn,
             )
+            # Optional rename step: propose a cleaned display-name; Enter on an
+            # empty buffer keeps the current name (no write). Esc cancels.
+            chosen_display: str | None = None
+            try:
+                initial = _best_display_name_candidate(group_items)
+                resp = prompt_new_display_name(initial=initial)
+                if isinstance(resp, str) and resp.strip():
+                    chosen_display = resp.strip()
+            except Exception:
+                # Non-fatal: any terminal issues should not block category saving
+                chosen_display = None
 
             _persist_group(
                 session,
@@ -617,6 +675,7 @@ def review_transaction_categories(
                 source_account=source_account,
                 group_items=group_items,
                 final_cat=final_cat,
+                display_name=chosen_display,
             )
 
             # Update result list

@@ -117,6 +117,8 @@ def upsert_transactions(
         merchant = _norm_str(tx.get("merchant"))
         memo = _norm_str(tx.get("memo"))
         fingerprint = compute_fingerprint(source_provider=source_provider, tx=tx)
+        # Prefer merchant for a first-pass display label; fallback to description
+        display_name = merchant or description
 
         insert_values = {
             "source_provider": source_provider,
@@ -130,6 +132,7 @@ def upsert_transactions(
             "description": description,
             "merchant": merchant,
             "memo": memo,
+            "display_name": display_name,
             "updated_at": now,
         }
         if external_id is not None:
