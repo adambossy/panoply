@@ -40,6 +40,21 @@ uv run --package <dist-name> pytest -q
 uv run pre-commit run --all-files
 ```
 
+## Formatting & CI
+
+We use Ruff for both linting and formatting.
+
+- Local: install the Git hook once so staged files are auto-formatted on commit:
+  ```bash
+  uv run pre-commit install
+  ```
+  You can also normalize the repo in one go: `uv run ruff format .`.
+
+- CI: pull requests from branches in this repository are auto-formatted. The
+  workflow will run `ruff check --fix` + `ruff format` and push a commit before
+  enforcing `uv run ruff format --check .`. For PRs from forks, the workflow
+  cannot push commits; please format locally or enable pre-commit.ci.
+
 Coding standards
 - Ruff and mypy configs live at the repo root and apply to all members.
 - Prefer Pydantic for request/response DTOs and internal schemas.
