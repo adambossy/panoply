@@ -268,15 +268,17 @@ def prompt_select_parent(
         event.app.exit(result=None)
 
     words = [TOP_LEVEL_SENTINEL] + list(parents)
-    allowed = set(words)
+    # Map lowercased input to canonical option values for normalization
+    canonical = {w.lower(): w for w in words}
+    allowed_lower = set(canonical.keys())
     completer = WordCompleter(words, ignore_case=True, match_middle=True, sentence=False)
 
     class _ParentValidator(Validator):
-        def __init__(self, allowed: set[str]) -> None:
-            self._allowed = allowed
+        def __init__(self, allowed_lower: set[str]) -> None:
+            self._allowed_lower = allowed_lower
 
         def validate(self, document) -> None:
-            if document.text not in self._allowed:
+            if document.text.lower() not in self._allowed_lower:
                 raise ValidationError(
                     message="Select a parent from the list or keep the top-level option."
                 )
@@ -290,13 +292,15 @@ def prompt_select_parent(
             key_bindings=kb,
         )
 
-    return sess.prompt(
+    value = sess.prompt(
         message,
         default=TOP_LEVEL_SENTINEL,
         completer=completer,
-        validator=_ParentValidator(allowed),
+        validator=_ParentValidator(allowed_lower),
         validate_while_typing=False,
     )
+    # Normalize to the canonical option (including the sentinel)
+    return canonical.get(value.lower(), value)
 
 
 __all__ = [

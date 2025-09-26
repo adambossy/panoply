@@ -177,14 +177,9 @@ def createCategory(
         session.execute(
             select(FaCategory).where(
                 func.lower(FaCategory.display_name) == display_n.lower(),
-                # Same parent scope: both NULL, or equal codes
-                (
-                    (FaCategory.parent_code.is_(None) if scope_parent is None else False)
-                    if scope_parent is None
-                    else (FaCategory.parent_code == scope_parent)
-                )
+                (FaCategory.parent_code == scope_parent)
                 if scope_parent is not None
-                else (FaCategory.parent_code.is_(None)),
+                else FaCategory.parent_code.is_(None),
             )
         )
         .scalars()
@@ -206,15 +201,32 @@ def createCategory(
         session.flush()  # obtain DB-computed defaults if any
     except IntegrityError:  # pragma: no cover - depends on DB uniqueness
         session.rollback()
-        # Race or case-variance conflict; fetch existing and return no-op
-        from db.models.finance import FaCategory  # local import
+        # Friendly handling of per-parent display_name conflicts under races
+        conflict = (
+            session.execute(
+                select(FaCategory).where(
+                    func.lower(FaCategory.display_name) == display_n.lower(),
+                    (FaCategory.parent_code == scope_parent)
+                    if scope_parent is not None
+                    else FaCategory.parent_code.is_(None),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if conflict is not None:
+            raise ValueError(
+                f"Display name '{display_n}' already exists under the selected parent"
+            ) from None
 
+        # Otherwise, treat a duplicate code as idempotent
         existing = (
             session.execute(select(FaCategory).where(func.lower(FaCategory.code) == code_n.lower()))
             .scalars()
             .first()
         )
         if existing is None:
+            # Unknown IntegrityError; bubble up original
             raise
         return {"category": _row_to_dict(existing), "created": False}
     except Exception:  # pragma: no cover - defensive
@@ -245,32 +257,34 @@ def list_categories_hierarchical(session: Session) -> list[CategoryDict]:
 
     The returned list is flat but ordered for easy rendering. Each element
     includes ``parent_code``; callers can group by that field to build a tree.
+    Fetches all rows in a single query to avoid N+1 queries.
     """
+    from collections import defaultdict
+
     from db.models.finance import FaCategory  # local import
 
-    parents = (
+    rows = (
         session.execute(
-            select(FaCategory)
-            .where(FaCategory.parent_code.is_(None))
-            .order_by(func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name)
+            select(FaCategory).order_by(
+                func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name
+            )
         )
         .scalars()
         .all()
     )
+
+    by_parent: dict[str | None, list] = defaultdict(list)
+    parents: list = []
+    for r in rows:
+        if getattr(r, "parent_code", None) is None:
+            parents.append(r)
+        else:
+            by_parent[r.parent_code].append(r)
+
     out: list[CategoryDict] = []
     for p in parents:
         out.append(_row_to_dict(p))
-        # children for this parent
-        kids = (
-            session.execute(
-                select(FaCategory)
-                .where(FaCategory.parent_code == p.code)
-                .order_by(func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name)
-            )
-            .scalars()
-            .all()
-        )
-        out.extend(_row_to_dict(k) for k in kids)
+        out.extend(_row_to_dict(c) for c in by_parent.get(p.code, []))
     return out
 
 
