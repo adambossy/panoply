@@ -630,6 +630,7 @@ def review_transaction_categories(
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
     allow_create: bool | None = None,
+    auto_confirm_dupes: bool = False,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
@@ -686,7 +687,17 @@ def review_transaction_categories(
         return []
 
     groups_map = _build_groups(prepared)
+    # Precompute a map from normalized merchant/description key -> positions.
+    # Duplicate identity for this session is based on this key (see issue #48).
+    by_key: dict[str, list[int]] = defaultdict(list)
+    for i, prep in enumerate(prepared):
+        k = _norm_merchant_key(prep.tx)
+        if k is not None:
+            by_key[k].append(i)
     final: list[CategorizedTransaction] = list(items)
+    # Track positions already finalized via duplicate auto-apply to support
+    # future scenarios where duplicates may span groups.
+    assigned: set[int] = set()
 
     with session_scope(database_url=database_url) as session:
         allowed = _load_allowed_categories(session)
@@ -698,7 +709,14 @@ def review_transaction_categories(
 
         for root in group_roots:
             idxs = groups_map[root]
-            group_items = [prepared[i] for i in idxs]
+            # Skip or filter groups when some positions were already assigned
+            # as duplicates of an earlier decision in this session.
+            remaining = [i for i in idxs if i not in assigned]
+            if not remaining:
+                # A future group fully covered by earlier duplicate handling.
+                print_fn("Duplicate(s) — skipping.")
+                continue
+            group_items = [prepared[i] for i in remaining]
 
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
@@ -747,8 +765,75 @@ def review_transaction_categories(
             for prep in group_items:
                 final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
 
+            # Commit the primary group immediately to avoid rolling it back if
+            # duplicate persistence fails later.
             session.commit()
             print_fn("Saved.")
+
+            # Session-duplicate handling (based on merchant/description key)
+            # Look ahead for any remaining items whose normalized key matches
+            # any item in this group. Offer to apply the chosen category to all
+            # such duplicates now and skip their later review.
+            group_keys = {
+                k for k in (_norm_merchant_key(p.tx) for p in group_items) if k is not None
+            }
+            dupe_positions: list[int] = []
+            for k in group_keys:
+                for pos in by_key.get(k, []):
+                    if pos in assigned or pos in remaining:
+                        continue
+                    # Only consider items that appear later in the queue (by pos)
+                    # to match the "look ahead" behavior; equal/earlier positions
+                    # are either part of this group or already processed.
+                    if pos > max(remaining):
+                        dupe_positions.append(pos)
+            # De‑duplicate while preserving order (readable explicit loop)
+            seen: set[int] = set()
+            unique_dupe_positions: list[int] = []
+            for p in dupe_positions:
+                if p not in seen:
+                    seen.add(p)
+                    unique_dupe_positions.append(p)
+            dupe_positions = unique_dupe_positions
+
+            if dupe_positions:
+                # Render a complete list per the requested copy
+                print_fn("Session duplicates (all matches):")
+                for pos in dupe_positions:
+                    print_fn(f"  {_fmt_tx_row(prepared[pos].tx)}")
+                # Prompt to apply now (default Yes) unless auto-confirm is set
+                if auto_confirm_dupes:
+                    choice_yes = True
+                else:
+                    prompt = (
+                        f"Apply '{final_cat}' to these {len(dupe_positions)} duplicates "
+                        "and skip their review? [Y/n]: "
+                    )
+                    resp = input_fn(prompt).strip().lower()
+                    choice_yes = resp in {"", "y", "yes"}
+
+                if choice_yes:
+                    dupe_items = [prepared[p] for p in dupe_positions]
+                    try:
+                        _persist_group(
+                            session,
+                            source_provider=source_provider,
+                            source_account=source_account,
+                            group_items=dupe_items,
+                            final_cat=final_cat,
+                        )
+                        for p in dupe_positions:
+                            assigned.add(p)
+                            final[p] = CategorizedTransaction(
+                                transaction=prepared[p].tx, category=final_cat
+                            )
+                        session.commit()
+                        print_fn("Saved duplicates.")
+                    except Exception as e:  # pragma: no cover - defensive
+                        session.rollback()
+                        print_fn(f"Warning: failed to persist duplicates: {e}")
+
+            # Blank line after handling this group (and any duplicates)
             print_fn("")
 
     return final
