@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import logging
-from pathlib import Path
 from logging.config import fileConfig
 
 from alembic import context
@@ -19,38 +18,7 @@ from sqlalchemy import engine_from_config, pool
 from dotenv import load_dotenv, find_dotenv
 
 
-def _load_dotenv_candidates() -> None:  # pragma: no cover - side-effectful
-    """Best-effort .env loading for Alembic executions.
 
-    Attempts to load a ``.env`` from the current working directory and from the
-    repository root (relative to this ``env.py`` file). Failures are ignored so
-    that migrations can still proceed when ``python-dotenv`` is unavailable.
-    """
-
-    try:
-        from dotenv import load_dotenv as _load_dotenv  # local import
-    except ImportError:
-        return
-
-    try:
-        candidates = [
-            Path.cwd() / ".env",
-            # repo root: libs/db/alembic/env.py → ../../..
-            Path(__file__).resolve().parents[3] / ".env",
-        ]
-    except Exception:
-        candidates = [Path.cwd() / ".env"]
-
-    for p in candidates:
-        try:
-            if p.is_file():
-                _load_dotenv(dotenv_path=p, override=False)
-        except OSError:
-            pass
-
-
-# Load env before reading DATABASE_URL
-_load_dotenv_candidates()
 
 # Alembic Config object, which provides access to the values within
 # the .ini file in use.
