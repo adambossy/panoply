@@ -22,6 +22,28 @@ from db.models.finance import FaCategory
 from sqlalchemy import text
 
 
+# Best-effort .env loading so $DATABASE_URL in repo root works out of the box
+def _load_dotenv_candidates() -> None:  # pragma: no cover - side-effectful
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+    try:
+        candidates = [
+            Path.cwd() / ".env",
+            Path(__file__).resolve().parents[3] / ".env",
+        ]
+    except IndexError:
+        candidates = [Path.cwd() / ".env"]
+    for p in candidates:
+        try:
+            if p.is_file():
+                load_dotenv(dotenv_path=p, override=False)
+        except Exception:
+            # Ignore dotenv errors; fall back to process environment
+            pass
+
+
 def _load_json(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -31,6 +53,8 @@ def _load_json(path: Path) -> list[dict[str, Any]]:
 
 
 def reseed_taxonomy(*, database_url: str | None, file: Path) -> None:
+    # Ensure .env is loaded before creating DB engine/session (no-op if already loaded)
+    _load_dotenv_candidates()
     data = _load_json(file)
     with session_scope(database_url=database_url) as session:
         # Destructive reset acceptable pre-launch
