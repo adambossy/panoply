@@ -10,6 +10,7 @@ dependencies = [
   "prompt_toolkit>=3.0.47",
   # Workspace DB library (SQLAlchemy engine/session + models)
   "db>=0",
+  "tqdm>=4.67.1",
 ]
 
 # Console script for `uv run categorize-expenses`
