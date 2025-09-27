@@ -79,6 +79,16 @@ class FaTransaction(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     merchant: Mapped[str | None] = mapped_column(Text, nullable=True)
     memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional human-friendly label shown in UIs/reports. Raw provider fields
+    # (description/merchant/raw_record) remain the source of truth for
+    # matching/deduplication and are never mutated by rename operations.
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name_source: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        server_default=text("'unknown'"),
+    )
+    renamed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     category: Mapped[str | None] = mapped_column(
         String,
@@ -104,6 +114,10 @@ class FaTransaction(Base):
         CheckConstraint(
             "category_source in ('llm','manual','rule','import','unknown')",
             name="ck_fa_tx_category_source",
+        ),
+        CheckConstraint(
+            "display_name_source in ('manual','rule','import','unknown')",
+            name="ck_fa_tx_display_name_source",
         ),
         CheckConstraint(
             (
