@@ -564,8 +564,10 @@ def review_transaction_categories_cmd(
     auto_confirm_dupes: bool = typer.Option(
         False,
         help=(
-            "Automatically confirm applying the chosen category to session duplicates "
-            "(based on normalized merchant/description)."
+            "Reserved: future prompt control for applying a chosen category to "
+            "session duplicates (by normalized merchant/description). Currently "
+            "a no-op; only historical DB duplicates are auto-applied when they "
+            "unanimously agree."
         ),
     ),
 ) -> int:

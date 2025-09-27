@@ -739,6 +739,13 @@ def review_transaction_categories(
     allow_create:
         When ``True`` (default), enables the “Create new category” path inside
         the interactive selector. Can be disabled in read‑only sessions.
+    auto_confirm_dupes:
+        Reserved for a future prompt that would ask whether to apply the chosen
+        category to other in-session items considered duplicates (by normalized
+        merchant/description). As of this implementation, duplicates are only
+        auto-applied from historical DB rows when they unanimously agree on a
+        category; there is no additional propagation to yet-to-be-reviewed
+        in-session items.
     """
 
     # Materialize and precompute identifiers
