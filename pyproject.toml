@@ -28,7 +28,6 @@ lint = [
 ]
 typecheck = [
   "mypy",
-  "types-tqdm>=4.67.0.20250809",
 ]
 test = [
   "pytest",

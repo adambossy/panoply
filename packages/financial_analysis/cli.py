@@ -436,9 +436,9 @@ def cmd_review_transaction_categories(
         on_chunk_done=_on_done,
     )
 
-    # Helper to compute-or-wait for a chunk with a small tqdm progress CTA
+    # Helper to compute-or-wait for a chunk with a simple wait message
     def _await_chunk(k: int) -> list:
-        # Compute in a helper thread so we can show elapsed time with tqdm
+        # Compute in a helper thread while we block the main thread until it's ready.
         from threading import Thread
 
         result: list | None = None
@@ -461,30 +461,8 @@ def cmd_review_transaction_categories(
 
         th = Thread(target=_work, name=f"fa-await-chunk-{k}")
         th.start()
-
-        # Show a lightweight tqdm timer while we wait
-        use_tqdm = False
-        try:
-            from tqdm import tqdm
-
-            use_tqdm = True
-        except Exception:
-            pass
-
-        if use_tqdm:
-            from tqdm import tqdm
-
-            desc = f"Waiting for batch {k + 1}/{n_chunks} to finish LLM categorization"
-            with tqdm(total=1, desc=desc, unit="batch", leave=False) as bar:
-                # Periodically refresh to update the elapsed time display
-                while th.is_alive():
-                    time.sleep(0.25)
-                    bar.update(0)
-                bar.update(1)
-            th.join()
-        else:
-            print(f"Waiting for batch {k + 1}/{n_chunks} to finish LLM categorization…")
-            th.join()
+        print(f"Waiting for batch {k + 1}/{n_chunks} to finish LLM categorization…")
+        th.join()
 
         if err is not None:
             raise err
