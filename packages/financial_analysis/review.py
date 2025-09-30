@@ -686,6 +686,22 @@ def _select_category_for_group(
 # ----------------------------------------------------------------------------
 
 
+def _format_pre_review_summary(
+    *, prefilled_groups: int, remaining_by_root: Mapping[int, int]
+) -> str:
+    """Return the one-line pre-review summary message.
+
+    Example: "Auto-applied to 3 groups; 12 groups remaining for review, largest size = 7"
+    """
+    remaining_sizes = [sz for sz in remaining_by_root.values() if sz > 0]
+    remaining_groups = len(remaining_sizes)
+    largest_group = max(remaining_sizes) if remaining_sizes else 0
+    return (
+        f"Auto-applied to {prefilled_groups} groups; {remaining_groups} groups "
+        f"remaining for review, largest size = {largest_group}"
+    )
+
+
 def review_transaction_categories(
     transactions_with_categories: Iterable[CategorizedTransaction],
     *,
@@ -837,12 +853,10 @@ def review_transaction_categories(
         group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
         # Summary before review starts
-        remaining_sizes = [sz for sz in rem_by_root.values() if sz > 0]
-        remaining_groups = len(remaining_sizes)
-        largest_group = max(remaining_sizes) if remaining_sizes else 0
         print_fn(
-            f"Auto-applied to {prefilled_groups} groups; {remaining_groups} groups "
-            f"remaining for review, largest size = {largest_group}"
+            _format_pre_review_summary(
+                prefilled_groups=prefilled_groups, remaining_by_root=rem_by_root
+            )
         )
 
         for root in group_roots:

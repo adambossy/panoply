@@ -21,6 +21,61 @@ from typer.models import OptionInfo
 from .logging_setup import configure_logging
 
 
+# ---- Small module‑level helpers used by CLI commands -------------------------
+
+
+def _resolve_max_workers(n_chunks: int) -> int:
+    """Resolve a conservative worker count for chunk categorization.
+
+    Honors the optional ``FA_CATEGORY_MAX_WORKERS`` env var, caps to ``n_chunks``
+    and to 32 to avoid oversubscription/rate limits, and ensures a minimum of 1.
+    """
+
+    import os  # defer import to keep module import surface minimal
+
+    _env_workers = os.getenv("FA_CATEGORY_MAX_WORKERS")
+    try:
+        max_workers = int(_env_workers) if _env_workers else None
+    except Exception:
+        max_workers = None
+
+    if max_workers is not None and max_workers > 0:
+        return max(1, min(max_workers, n_chunks, 32))
+    # Default: modest parallelism to be gentle on API rate limits
+    return max(1, min(8, n_chunks))
+
+
+def _compute_one(
+    idx: int,
+    *,
+    dataset_id: str,
+    ctv_items: list,
+    source_provider: str,
+    chunk_size: int,
+) -> tuple[int, list, float]:
+    """Compute a single categorization chunk and return timing info.
+
+    Returns a tuple ``(idx, items, seconds)`` for easy assembly and logging.
+    """
+
+    import time
+
+    # Local import to keep CLI startup fast and avoid global side effects
+    from .batching import get_or_compute_chunk
+
+    t0_local = time.perf_counter()
+    items = list(
+        get_or_compute_chunk(
+            dataset_id,
+            idx,
+            ctv_items,
+            source_provider=source_provider,
+            chunk_size=chunk_size,
+        )
+    )
+    return idx, items, time.perf_counter() - t0_local
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``financial_analysis`` CLI (stub).
 
@@ -313,7 +368,6 @@ def cmd_review_transaction_categories(
     import csv
     import os
     import sys
-    import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
@@ -372,11 +426,7 @@ def cmd_review_transaction_categories(
     # Categorize in chunks with on-disk caching and only start review once all
     # batches have finished (per Issue #70).
     try:
-        from .batching import (
-            compute_dataset_id,
-            get_or_compute_chunk,
-            total_chunks_for,
-        )
+        from .batching import compute_dataset_id, total_chunks_for
     except Exception as e:
         print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
         return 1
@@ -407,38 +457,21 @@ def cmd_review_transaction_categories(
     all_suggestions: list = []
     try:
         # Bounded worker pool; default to a conservative level unless overridden.
-        _env_workers = os.getenv("FA_CATEGORY_MAX_WORKERS")
-        try:
-            max_workers = int(_env_workers) if _env_workers else None
-        except Exception:
-            max_workers = None
-        if max_workers is not None and max_workers > 0:
-            # Cap to avoid oversubscription and rate limits
-            max_workers = min(max_workers, n_chunks, 32)
-        else:
-            # Default: min(8, n_chunks). Keep modest to avoid API rate limits.
-            # Ensure at least 1 worker in case of future code changes.
-            max_workers = max(1, min(8, n_chunks))
+        max_workers = _resolve_max_workers(n_chunks)
 
         results_by_idx: dict[int, list] = {}
-
-        def _compute_one(idx: int) -> tuple[int, list, float]:
-            t0_local = time.perf_counter()
-            items = list(
-                get_or_compute_chunk(
-                    dataset_id,
-                    idx,
-                    ctv_items,
-                    source_provider=source_provider,
-                    chunk_size=chunk_size,
-                )
-            )
-            return idx, items, time.perf_counter() - t0_local
 
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fa-chunk") as ex:
             fut_to_idx = {}
             for k in range(n_chunks):
-                fut = ex.submit(_compute_one, k)
+                fut = ex.submit(
+                    _compute_one,
+                    k,
+                    dataset_id=dataset_id,
+                    ctv_items=ctv_items,
+                    source_provider=source_provider,
+                    chunk_size=chunk_size,
+                )
                 fut_to_idx[fut] = k
 
             for fut in as_completed(fut_to_idx):
