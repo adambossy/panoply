@@ -825,10 +825,12 @@ def review_transaction_categories(
         # Ensure the interactive loop skips prefilled positions
         assigned |= prefilled_assigned
 
-        # Compute remaining counts once per group root and sort by remaining size desc,
-        # tie-breaking by first index for determinism.
+        # Compute remaining counts once per group root and consider only groups
+        # with remaining items. Sort by remaining size desc, tie-breaking by
+        # first index for determinism.
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
-        group_roots = sorted(groups_map.keys(), key=lambda r: (-rem_by_root[r], min(groups_map[r])))
+        group_roots = [r for r, sz in rem_by_root.items() if sz > 0]
+        group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
         # Summary before review starts
         remaining_sizes = [sz for sz in rem_by_root.values() if sz > 0]

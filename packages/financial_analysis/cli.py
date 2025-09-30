@@ -314,7 +314,7 @@ def cmd_review_transaction_categories(
     import os
     import sys
     import time
-    # Path not needed after switching to consolidated review
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -401,29 +401,63 @@ def cmd_review_transaction_categories(
     print()
     print(f"Waiting for LLM ({n_chunks} chunks)…")
 
-    # Compute all chunks up front; keep cache semantics unchanged. Print a
-    # simple per-batch timing line as each chunk completes.
+    # Compute all chunks up front in parallel; keep cache semantics unchanged.
+    # Print a short timing line as each batch completes. Preserve overall
+    # output order by assembling results by chunk index after completion.
     all_suggestions: list = []
-    k = -1  # guard for error reporting if failure occurs before first iteration
     try:
-        for k in range(n_chunks):
-            t0 = time.perf_counter()
-            items_k = list(
+        # Bounded worker pool; default to a conservative level unless overridden.
+        _env_workers = os.getenv("FA_CATEGORY_MAX_WORKERS")
+        try:
+            max_workers = int(_env_workers) if _env_workers else None
+        except Exception:
+            max_workers = None
+        if max_workers is not None and max_workers > 0:
+            # Cap to avoid oversubscription and rate limits
+            max_workers = min(max_workers, n_chunks, 32)
+        else:
+            # Default: min(8, n_chunks). Keep modest to avoid API rate limits.
+            # Ensure at least 1 worker in case of future code changes.
+            max_workers = max(1, min(8, n_chunks))
+
+        results_by_idx: dict[int, list] = {}
+
+        def _compute_one(idx: int) -> tuple[int, list, float]:
+            t0_local = time.perf_counter()
+            items = list(
                 get_or_compute_chunk(
                     dataset_id,
-                    k,
+                    idx,
                     ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
                 )
             )
-            dt = time.perf_counter() - t0
-            all_suggestions.extend(items_k)
-            print(f"Batch {k + 1}/{n_chunks} finished in {dt:.1f}s")
+            return idx, items, time.perf_counter() - t0_local
+
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fa-chunk") as ex:
+            fut_to_idx = {}
+            for k in range(n_chunks):
+                fut = ex.submit(_compute_one, k)
+                fut_to_idx[fut] = k
+
+            for fut in as_completed(fut_to_idx):
+                try:
+                    idx, items_k, dt = fut.result()
+                except Exception as e:
+                    failed_idx = fut_to_idx.get(fut, -1)
+                    batch_no = failed_idx + 1 if failed_idx >= 0 else 0
+                    msg = f"Error: categorization failed on batch {batch_no}/{n_chunks}: {e}"
+                    print(msg, file=sys.stderr)
+                    return 1
+                results_by_idx[idx] = items_k
+                print(f"Batch {idx + 1}/{n_chunks} finished in {dt:.1f}s")
+
+        # Assemble in index order to preserve deterministic output ordering
+        for k in range(n_chunks):
+            all_suggestions.extend(results_by_idx[k])
     except Exception as e:
-        batch_no = (k + 1) if k >= 0 else 0
-        msg = f"Error: categorize_expenses failed on batch {batch_no}/{n_chunks}: {e}"
-        print(msg, file=sys.stderr)
+        print(f"Error: categorization failed: {e}", file=sys.stderr)
         return 1
 
     # Begin a single consolidated review pass.
