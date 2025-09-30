@@ -240,7 +240,7 @@ def prompt_new_category_name(
 
     kb = KeyBindings()
 
-    @kb.add("escape")
+    @kb.add("escape", eager=True)
     def _(event) -> None:  # pragma: no cover - exercised indirectly
         event.app.exit(result=None)
 
