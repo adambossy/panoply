@@ -774,6 +774,7 @@ def review_transaction_categories(
         # in-session rows immediately. Persist and mark them as finalized so the
         # main loop will skip them. Emit one concise line per key.
         prefilled_assigned: set[int] = set()
+        prefilled_groups: int = 0
         for _k, positions in by_key.items():
             if not positions:
                 continue
@@ -809,6 +810,8 @@ def review_transaction_categories(
                     transaction=prepared[p].tx, category=db_default
                 )
 
+            prefilled_groups += 1
+
             merchant_display_raw = (
                 group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
             )
@@ -822,8 +825,19 @@ def review_transaction_categories(
         # Ensure the interactive loop skips prefilled positions
         assigned |= prefilled_assigned
 
-        # Deterministic order by first index in each group
-        group_roots = sorted(groups_map.keys(), key=lambda r: min(groups_map[r]))
+        # Compute remaining counts once per group root and sort by remaining size desc,
+        # tie-breaking by first index for determinism.
+        rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
+        group_roots = sorted(groups_map.keys(), key=lambda r: (-rem_by_root[r], min(groups_map[r])))
+
+        # Summary before review starts
+        remaining_sizes = [sz for sz in rem_by_root.values() if sz > 0]
+        remaining_groups = len(remaining_sizes)
+        largest_group = max(remaining_sizes) if remaining_sizes else 0
+        print_fn(
+            f"Auto-applied to {prefilled_groups} groups; {remaining_groups} groups "
+            f"remaining for review, largest size = {largest_group}"
+        )
 
         for root in group_roots:
             idxs = groups_map[root]
