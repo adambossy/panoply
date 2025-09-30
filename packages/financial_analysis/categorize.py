@@ -15,7 +15,6 @@ import math
 import random
 import time
 from collections.abc import Iterable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
@@ -29,6 +28,7 @@ from .categorization import (
 )
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
+from .pmap import p_map
 
 # ---- Tunables (private) ------------------------------------------------------
 
@@ -294,14 +294,13 @@ def categorize_expenses(
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
-    futures: list[Future[PageResult]] = []
-
-    # Simplified executor lifecycle with context manager; cancel futures on error.
     try:
-        with ThreadPoolExecutor(max_workers=_CONCURRENCY) as pool:
-            for page_index, base, end in _paginate(n_total, page_size):
-                fut = pool.submit(
-                    _categorize_page,
+        pages_iter = _paginate(n_total, page_size)
+
+        def _map_page(t: tuple[int, int, int]) -> PageResult:
+            page_index, base, end = t
+            try:
+                return _categorize_page(
                     page_index,
                     base=base,
                     end=end,
@@ -309,32 +308,25 @@ def categorize_expenses(
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
                 )
-                futures.append(fut)
-
-            # All pages submitted.
-
-            for fut in as_completed(futures):
-                try:
-                    result = fut.result()
-                    for i, cat in enumerate(result.categories):
-                        categories_by_abs_idx[result.base + i] = cat
-                except Exception as e:
-                    _logger.error(
-                        "categorize_expenses:future_failed future_id=%s error=%s error_type=%s",
-                        id(fut),
-                        str(e),
-                        e.__class__.__name__,
-                    )
-                    # Cancel remaining work and propagate the error
-                    pool.shutdown(wait=False, cancel_futures=True)
+            except Exception as e:  # noqa: BLE001
+                # Preserve ValueError semantics for validation/parse errors.
+                if isinstance(e, ValueError):
                     raise
+                raise RuntimeError(
+                    f"categorize_expenses failed for page_index={page_index} base={base} end={end}"
+                ) from e
 
+        page_results: list[PageResult] = p_map(
+            pages_iter, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
+        )
+        for page in page_results:
+            for i, cat in enumerate(page.categories):
+                categories_by_abs_idx[page.base + i] = cat
     except Exception as e:
         _logger.error(
-            "categorize_expenses:pool_exception error=%s error_type=%s futures_count=%d",
+            "categorize_expenses:pmap_exception error=%s error_type=%s",
             str(e),
             e.__class__.__name__,
-            len(futures),
         )
         raise
 
