@@ -623,12 +623,15 @@ def _select_category_for_group(
     allow_create_toggle: bool | None,
     input_fn: Callable[[str], str],
     print_fn: Callable[..., None],
-) -> str:
+) -> tuple[str, bool]:
     """Select (or create) a category for the current group.
 
     Encapsulates the interactive loop, injected selector path, creation intent
     handling, and validation against the allowed set. Loops until a valid
     category string is obtained.
+
+    Returns:
+        tuple[str, bool]: The selected category and whether it was changed from the default
     """
     options, default_category = _prepare_selector_inputs(
         allowed=allowed, default_category=chosen_default
@@ -660,13 +663,14 @@ def _select_category_for_group(
                     allowed=allowed, default_category=default_category
                 )
                 continue
-            return result
+            return result, True  # Category creation always counts as a change
 
         # Normal selection path
         if not isinstance(selected, str):
             raise TypeError(f"selector must return a string; got {type(selected).__name__}")
         resp_str = selected
         final_cat = default_category if not resp_str.strip() else resp_str.strip()
+        category_changed = final_cat != chosen_default
         if final_cat not in allowed:
             print_fn("Invalid category. Enter one of: " + ", ".join(options))
             # Refresh options in case allowed changed externally
@@ -674,7 +678,7 @@ def _select_category_for_group(
                 allowed=allowed, default_category=default_category
             )
             continue
-        return final_cat
+        return final_cat, category_changed
 
 
 # ----------------------------------------------------------------------------
@@ -877,7 +881,7 @@ def review_transaction_categories(
             )
             print_fn(f"Proposed category: {chosen_default}")
 
-            final_cat = _select_category_for_group(
+            final_cat, category_changed = _select_category_for_group(
                 session=session,
                 allowed=allowed,
                 chosen_default=chosen_default,
@@ -886,23 +890,23 @@ def review_transaction_categories(
                 input_fn=input_fn,
                 print_fn=print_fn,
             )
-            # Optional rename step: propose a cleaned display-name; Enter on an
-            # empty buffer keeps the current name (no write). Esc cancels.
+            # Optional rename step: only prompt for display name when category was changed
             chosen_display: str | None = None
-            try:
-                initial = _best_display_name_candidate(group_items)
-                resp = prompt_new_display_name(initial=initial)
-                # Only treat as a rename when the operator actually changed the value;
-                # Enter on the pre-filled default should keep the current name.
-                if (
-                    isinstance(resp, str)
-                    and resp.strip()
-                    and resp.strip() != (initial or "").strip()
-                ):
-                    chosen_display = resp.strip()
-            except Exception:
-                # Non-fatal: any terminal issues should not block category saving
-                chosen_display = None
+            if category_changed:
+                try:
+                    initial = _best_display_name_candidate(group_items)
+                    resp = prompt_new_display_name(initial=initial)
+                    # Only treat as a rename when the operator actually changed the value;
+                    # Enter on the pre-filled default should keep the current name.
+                    if (
+                        isinstance(resp, str)
+                        and resp.strip()
+                        and resp.strip() != (initial or "").strip()
+                    ):
+                        chosen_display = resp.strip()
+                except Exception:
+                    # Non-fatal: any terminal issues should not block category saving
+                    chosen_display = None
 
             _persist_group(
                 session,
