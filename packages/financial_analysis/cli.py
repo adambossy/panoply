@@ -321,7 +321,7 @@ def cmd_review_transaction_categories(
     # called directly.
     load_dotenv(override=False)
 
-    from .api import categorize_expenses, review_transaction_categories
+    from .api import review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
@@ -369,32 +369,126 @@ def cmd_review_transaction_categories(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Categorize to get suggestions with friendlier UX (suppress verbose logs)
+    # Categorize in chunks with on-disk caching and start review after batch 1
     try:
-        total = len(ctv_items)
-        filename = Path(csv_path).name
-        print()
-        print(f"Categorizing {total} transactions in {filename}...")
-
-        t0 = time.perf_counter()
-        suggestions = list(categorize_expenses(ctv_items))
-        dt = time.perf_counter() - t0
-        print(f"Finished categorizing {total} transactions ({dt:.2f}s)")
-        print()
+        from .batching import (
+            compute_dataset_id,
+            get_or_compute_chunk,
+            spawn_background_chunk_worker,
+            total_chunks_for,
+        )
     except Exception as e:
-        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
         return 1
 
-    # Run the interactive review+persist loop
+    total = len(ctv_items)
+    if total == 0:
+        print("No transactions to review.")
+        return 0
+
+    # Chunk size: fixed at 250 by default; allow a dev override via env
+    _env_sz = os.getenv("FA_REVIEW_CHUNK_SIZE")
     try:
-        review_transaction_categories(
-            suggestions,
-            source_provider=source_provider,
-            source_account=source_account,
-            database_url=database_url,
-            allow_create=allow_create,
-            auto_confirm_dupes=auto_confirm_dupes,
+        chunk_size = int(_env_sz) if _env_sz else 250
+        if chunk_size <= 0:
+            raise ValueError
+    except Exception:
+        chunk_size = 250
+
+    dataset_id = compute_dataset_id(ctv_items, source_provider=source_provider)
+    n_chunks = total_chunks_for(total, chunk_size=chunk_size)
+
+    filename = Path(csv_path).name
+    first = min(chunk_size, total)
+    print()
+    print(f"Categorizing {first} of {total} transactions in {filename} to start review…")
+
+    # Compute the first chunk synchronously so we can start the review loop
+    t0 = time.perf_counter()
+    try:
+        current_chunk = list(
+            get_or_compute_chunk(
+                dataset_id,
+                0,
+                ctv_items,
+                source_provider=source_provider,
+                chunk_size=chunk_size,
+            )
         )
+    except Exception as e:
+        print(f"Error: categorize_expenses failed on batch 1/{n_chunks}: {e}", file=sys.stderr)
+        return 1
+    dt = time.perf_counter() - t0
+    print(f"Batch 1/{n_chunks} finished in {dt:.1f}s")
+
+    # Start background worker to compute remaining chunks sequentially
+    def _on_done(idx: int, seconds: float) -> None:
+        # idx is 0-based chunk; print as 1-based
+        print(f"Batch {idx + 1}/{n_chunks} finished in {seconds:.1f}s")
+
+    _bg = spawn_background_chunk_worker(
+        dataset_id=dataset_id,
+        start_chunk=1,
+        total_chunks=n_chunks,
+        ctv_items=ctv_items,
+        source_provider=source_provider,
+        chunk_size=chunk_size,
+        on_chunk_done=_on_done,
+    )
+
+    # Helper to compute-or-wait for a chunk with a simple wait message
+    def _await_chunk(k: int) -> list:
+        # Compute in a helper thread while we block the main thread until it's ready.
+        from threading import Thread
+
+        result: list | None = None
+        err: Exception | None = None
+
+        def _work() -> None:
+            nonlocal result, err
+            try:
+                result = list(
+                    get_or_compute_chunk(
+                        dataset_id,
+                        k,
+                        ctv_items,
+                        source_provider=source_provider,
+                        chunk_size=chunk_size,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                err = e
+
+        th = Thread(target=_work, name=f"fa-await-chunk-{k}")
+        th.start()
+        print(f"Waiting for batch {k + 1}/{n_chunks} to finish LLM categorization…")
+        th.join()
+
+        if err is not None:
+            raise err
+        return list(result or [])
+
+    # Run the interactive review+persist loop, chunk by chunk
+    try:
+        for k in range(n_chunks):
+            if k == 0:
+                suggestions_k = current_chunk
+            else:
+                suggestions_k = _await_chunk(k)
+
+            review_transaction_categories(
+                suggestions_k,
+                source_provider=source_provider,
+                source_account=source_account,
+                database_url=database_url,
+                allow_create=allow_create,
+                auto_confirm_dupes=auto_confirm_dupes,
+            )
+        # Ensure background worker is done before exiting the command
+        try:
+            _bg.join()
+        except Exception:
+            pass
     except Exception as e:
         print(f"Error: review failed: {e}", file=sys.stderr)
         return 1

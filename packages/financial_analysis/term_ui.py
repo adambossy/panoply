@@ -7,7 +7,9 @@ they're easy to test in isolation.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
@@ -191,16 +193,30 @@ def select_category_or_create(
             key_bindings=kb,
         )
 
-    result = sess.prompt(
-        message,
-        completer=completer,
-        default=default,
-        key_bindings=kb,
-        auto_suggest=auto_suggest,
-        style=style,
-    )
+    # Start with an empty buffer so the first keystroke doesn't append to the
+    # suggested default. Show the suggestion as a placeholder when supported,
+    # and treat blank Enter as "accept the default" to preserve UX.
+    # Compose kwargs once; detect support for `placeholder` via introspection.
+    prompt_kwargs: dict[str, Any] = {
+        "message": message,
+        "completer": completer,
+        "default": "",
+        "key_bindings": kb,
+        "auto_suggest": auto_suggest,
+        "style": style,
+    }
+    supports_placeholder = "placeholder" in inspect.signature(sess.prompt).parameters
+    if supports_placeholder and isinstance(default, str) and default:
+        prompt_kwargs["placeholder"] = default
+    elif isinstance(default, str) and default:
+        prompt_kwargs["message"] = f"{message} [{default}]"
+
+    result = sess.prompt(**prompt_kwargs)
 
     # Interpret result
+    # Empty input (e.g., immediate Enter) accepts the proposed default.
+    if result == "":
+        result = default if isinstance(default, str) and default != "" else ""
     if allow_create:
         if result == CREATE_SENTINEL:
             return CreateCategoryRequest("")
