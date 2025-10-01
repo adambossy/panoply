@@ -61,7 +61,11 @@ def ensure_valid_ctv_descriptions(ctv_items: Sequence[Mapping[str, Any]]) -> Non
 
 
 def parse_and_align_categories(
-    body: Mapping[str, Any], *, num_items: int, fallback_to_other: bool = True
+    body: Mapping[str, Any],
+    *,
+    num_items: int,
+    allowed_categories: Sequence[str] | None = None,
+    fallback_to_other: bool = True,
 ) -> list[str]:
     """Parse the Responses API JSON and return categories aligned by ``idx``.
 
@@ -86,6 +90,10 @@ def parse_and_align_categories(
         raise ValueError(f"Invalid response: expected {num_items} results, got {len(results)}")
 
     categories_by_idx: list[str | None] = [None] * num_items
+    # Resolve the effective allow-list for this parse operation. When not
+    # provided, fall back to the module-level constant to preserve existing
+    # behavior for callers that don’t yet thread the taxonomy through.
+    allowed_set = set(allowed_categories) if allowed_categories is not None else _ALLOWED_SET
 
     for item in results:
         if not isinstance(item, Mapping):
@@ -102,7 +110,7 @@ def parse_and_align_categories(
         if not isinstance(cat_raw, str):
             raise ValueError("Invalid response: 'category' must be a string")
         cat = cat_raw.strip()
-        if cat not in _ALLOWED_SET:
+        if cat not in allowed_set:
             if fallback_to_other:
                 cat = "Other"
             else:

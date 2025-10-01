@@ -66,14 +66,16 @@ def _get_cache_root() -> Path:
     return (Path.cwd() / ".transactions").resolve()
 
 
-def _settings_hash() -> str:
+def _settings_hash(allowed_categories: tuple[str, ...] | None = None) -> str:
     """Hash model + categories + prompt schema/strings to invalidate cache on change."""
 
+    # Treat only None as fallback; preserve empty tuple semantics if ever passed.
+    cats = allowed_categories if allowed_categories is not None else ALLOWED_CATEGORIES
     payload = {
         "model": _MODEL,
-        "categories": list(ALLOWED_CATEGORIES),
+        "categories": list(cats),
         # Include the JSON Schema and instruction strings to capture prompt changes
-        "response_format": prompting.build_response_format(ALLOWED_CATEGORIES),
+        "response_format": prompting.build_response_format(cats),
         "system_instructions": prompting.build_system_instructions(),
         # Field order of CTV JSON also affects shape/semantics
         "ctv_fields": list(prompting.CTV_FIELD_ORDER),
@@ -82,7 +84,9 @@ def _settings_hash() -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def compute_dataset_id(ctv_items: list[Mapping[str, Any]], *, source_provider: str) -> str:
+def compute_dataset_id(
+    ctv_items: list[Mapping[str, Any]], *, source_provider: str, allowed_categories: tuple[str, ...] | None = None
+) -> str:
     """Return a stable identifier for the input dataset + settings.
 
     Incorporates per-transaction fingerprints (order-sensitive) and the
@@ -95,7 +99,7 @@ def compute_dataset_id(ctv_items: list[Mapping[str, Any]], *, source_provider: s
     ]
     payload = {
         "fps": fps,
-        "settings": _settings_hash(),
+        "settings": _settings_hash(allowed_categories),
     }
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
@@ -209,6 +213,7 @@ def get_or_compute_chunk(
     *,
     source_provider: str,
     chunk_size: int = 250,
+    allowed_categories: tuple[str, ...] | None = None,
 ) -> list[CategorizedTransaction]:
     """Return categorized results for the ``chunk_idx`` slice.
 
@@ -222,7 +227,7 @@ def get_or_compute_chunk(
         chunk_idx=chunk_idx,
         base=base,
         end=end,
-        settings_hash=_settings_hash(),
+        settings_hash=_settings_hash(allowed_categories),
         provider=source_provider,
     )
 
@@ -234,7 +239,10 @@ def get_or_compute_chunk(
     from .categorize import categorize_expenses
 
     slice_items = ctv_items[base:end]
-    results = list(categorize_expenses(slice_items))
+    if allowed_categories is not None:
+        results = list(categorize_expenses(slice_items, allowed_categories=allowed_categories))
+    else:
+        results = list(categorize_expenses(slice_items))
     # Add provider to transactions for stable fingerprinting in cache (non-destructive copy)
     to_cache: list[CategorizedTransaction] = []
     for r in results:
