@@ -131,6 +131,8 @@ def _build_page_payload(
     original_seq: list[Mapping[str, Any]],
     base: int,
     end: int,
+    *,
+    allowed_categories: tuple[str, ...],
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
 
@@ -156,7 +158,8 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
+    # Thread the allow‑list explicitly to avoid mutable global state.
+    user_content = prompting.build_user_content(ctv_json, allowed_categories=allowed_categories)
     return len(ctv_page), user_content
 
 
@@ -202,8 +205,11 @@ def _categorize_page(
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
+    allowed_categories: tuple[str, ...],
 ) -> PageResult:
-    count, user_content = _build_page_payload(original_seq, base, end)
+    count, user_content = _build_page_payload(
+        original_seq, base, end, allowed_categories=allowed_categories
+    )
 
     # Instantiate the client once per page and reuse across retries.
     client = _create_client()
@@ -218,7 +224,9 @@ def _categorize_page(
                 text=text_cfg,
             )
             decoded = _extract_response_json_mapping(resp)
-            page_categories = parse_and_align_categories(decoded, num_items=count)
+            page_categories = parse_and_align_categories(
+                decoded, num_items=count, allowed_categories=allowed_categories
+            )
             return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -265,6 +273,7 @@ def categorize_expenses(
     transactions: Transactions,
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
+    allowed_categories: Iterable[str] | None = None,
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
 
@@ -288,7 +297,12 @@ def categorize_expenses(
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
-    response_format = prompting.build_response_format(ALLOWED_CATEGORIES)
+    # Resolve the effective allowed categories once per call and thread through
+    # payload/user content, response_format, and result validation.
+    _allowed: tuple[str, ...] = (
+        tuple(allowed_categories) if allowed_categories is not None else ALLOWED_CATEGORIES
+    )
+    response_format = prompting.build_response_format(_allowed)
     # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
 
@@ -307,6 +321,7 @@ def categorize_expenses(
                     original_seq=original_seq,
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
+                    allowed_categories=_allowed,
                 )
             except Exception as e:  # noqa: BLE001
                 # Preserve ValueError semantics for validation/parse errors.
