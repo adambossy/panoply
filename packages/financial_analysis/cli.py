@@ -21,6 +21,61 @@ from typer.models import OptionInfo
 from .logging_setup import configure_logging
 
 
+# ---- Small module‑level helpers used by CLI commands -------------------------
+
+
+def _resolve_max_workers(n_chunks: int) -> int:
+    """Resolve a conservative worker count for chunk categorization.
+
+    Honors the optional ``FA_CATEGORY_MAX_WORKERS`` env var, caps to ``n_chunks``
+    and to 32 to avoid oversubscription/rate limits, and ensures a minimum of 1.
+    """
+
+    import os  # defer import to keep module import surface minimal
+
+    _env_workers = os.getenv("FA_CATEGORY_MAX_WORKERS")
+    try:
+        max_workers = int(_env_workers) if _env_workers else None
+    except Exception:
+        max_workers = None
+
+    if max_workers is not None and max_workers > 0:
+        return max(1, min(max_workers, n_chunks, 32))
+    # Default: modest parallelism to be gentle on API rate limits
+    return max(1, min(8, n_chunks))
+
+
+def _compute_one(
+    idx: int,
+    *,
+    dataset_id: str,
+    ctv_items: list,
+    source_provider: str,
+    chunk_size: int,
+) -> tuple[int, list, float]:
+    """Compute a single categorization chunk and return timing info.
+
+    Returns a tuple ``(idx, items, seconds)`` for easy assembly and logging.
+    """
+
+    import time
+
+    # Local import to keep CLI startup fast and avoid global side effects
+    from .batching import get_or_compute_chunk
+
+    t0_local = time.perf_counter()
+    items = list(
+        get_or_compute_chunk(
+            dataset_id,
+            idx,
+            ctv_items,
+            source_provider=source_provider,
+            chunk_size=chunk_size,
+        )
+    )
+    return idx, items, time.perf_counter() - t0_local
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``financial_analysis`` CLI (stub).
 
@@ -313,8 +368,7 @@ def cmd_review_transaction_categories(
     import csv
     import os
     import sys
-    import time
-    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -369,14 +423,10 @@ def cmd_review_transaction_categories(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Categorize in chunks with on-disk caching and start review after batch 1
+    # Categorize in chunks with on-disk caching and only start review once all
+    # batches have finished (per Issue #70).
     try:
-        from .batching import (
-            compute_dataset_id,
-            get_or_compute_chunk,
-            spawn_background_chunk_worker,
-            total_chunks_for,
-        )
+        from .batching import compute_dataset_id, total_chunks_for
     except Exception as e:
         print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
         return 1
@@ -398,97 +448,61 @@ def cmd_review_transaction_categories(
     dataset_id = compute_dataset_id(ctv_items, source_provider=source_provider)
     n_chunks = total_chunks_for(total, chunk_size=chunk_size)
 
-    filename = Path(csv_path).name
-    first = min(chunk_size, total)
     print()
-    print(f"Categorizing {first} of {total} transactions in {filename} to start review…")
+    print(f"Waiting for LLM ({n_chunks} chunks)…")
 
-    # Compute the first chunk synchronously so we can start the review loop
-    t0 = time.perf_counter()
+    # Compute all chunks up front in parallel; keep cache semantics unchanged.
+    # Print a short timing line as each batch completes. Preserve overall
+    # output order by assembling results by chunk index after completion.
+    all_suggestions: list = []
     try:
-        current_chunk = list(
-            get_or_compute_chunk(
-                dataset_id,
-                0,
-                ctv_items,
-                source_provider=source_provider,
-                chunk_size=chunk_size,
-            )
-        )
-    except Exception as e:
-        print(f"Error: categorize_expenses failed on batch 1/{n_chunks}: {e}", file=sys.stderr)
-        return 1
-    dt = time.perf_counter() - t0
-    print(f"Batch 1/{n_chunks} finished in {dt:.1f}s")
+        # Bounded worker pool; default to a conservative level unless overridden.
+        max_workers = _resolve_max_workers(n_chunks)
 
-    # Start background worker to compute remaining chunks sequentially
-    def _on_done(idx: int, seconds: float) -> None:
-        # idx is 0-based chunk; print as 1-based
-        print(f"Batch {idx + 1}/{n_chunks} finished in {seconds:.1f}s")
+        results_by_idx: dict[int, list] = {}
 
-    _bg = spawn_background_chunk_worker(
-        dataset_id=dataset_id,
-        start_chunk=1,
-        total_chunks=n_chunks,
-        ctv_items=ctv_items,
-        source_provider=source_provider,
-        chunk_size=chunk_size,
-        on_chunk_done=_on_done,
-    )
-
-    # Helper to compute-or-wait for a chunk with a simple wait message
-    def _await_chunk(k: int) -> list:
-        # Compute in a helper thread while we block the main thread until it's ready.
-        from threading import Thread
-
-        result: list | None = None
-        err: Exception | None = None
-
-        def _work() -> None:
-            nonlocal result, err
-            try:
-                result = list(
-                    get_or_compute_chunk(
-                        dataset_id,
-                        k,
-                        ctv_items,
-                        source_provider=source_provider,
-                        chunk_size=chunk_size,
-                    )
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fa-chunk") as ex:
+            fut_to_idx = {}
+            for k in range(n_chunks):
+                fut = ex.submit(
+                    _compute_one,
+                    k,
+                    dataset_id=dataset_id,
+                    ctv_items=ctv_items,
+                    source_provider=source_provider,
+                    chunk_size=chunk_size,
                 )
-            except Exception as e:  # noqa: BLE001
-                err = e
+                fut_to_idx[fut] = k
 
-        th = Thread(target=_work, name=f"fa-await-chunk-{k}")
-        th.start()
-        print(f"Waiting for batch {k + 1}/{n_chunks} to finish LLM categorization…")
-        th.join()
+            for fut in as_completed(fut_to_idx):
+                try:
+                    idx, items_k, dt = fut.result()
+                except Exception as e:
+                    failed_idx = fut_to_idx.get(fut, -1)
+                    batch_no = failed_idx + 1 if failed_idx >= 0 else 0
+                    msg = f"Error: categorization failed on batch {batch_no}/{n_chunks}: {e}"
+                    print(msg, file=sys.stderr)
+                    return 1
+                results_by_idx[idx] = items_k
+                print(f"Batch {idx + 1}/{n_chunks} finished in {dt:.1f}s")
 
-        if err is not None:
-            raise err
-        return list(result or [])
-
-    # Run the interactive review+persist loop, chunk by chunk
-    try:
+        # Assemble in index order to preserve deterministic output ordering
         for k in range(n_chunks):
-            if k == 0:
-                suggestions_k = current_chunk
-            else:
-                suggestions_k = _await_chunk(k)
+            all_suggestions.extend(results_by_idx[k])
+    except Exception as e:
+        print(f"Error: categorization failed: {e}", file=sys.stderr)
+        return 1
 
-            review_transaction_categories(
-                suggestions_k,
-                source_provider=source_provider,
-                source_account=source_account,
-                database_url=database_url,
-                allow_create=allow_create,
-                auto_confirm_dupes=auto_confirm_dupes,
-            )
-        # Ensure background worker is done before exiting the command
-        try:
-            _bg.join()
-        except Exception:
-            pass
+    # Begin a single consolidated review pass.
+    try:
+        review_transaction_categories(
+            all_suggestions,
+            source_provider=source_provider,
+            source_account=source_account,
+            database_url=database_url,
+            allow_create=allow_create,
+            auto_confirm_dupes=auto_confirm_dupes,
+        )
     except Exception as e:
         print(f"Error: review failed: {e}", file=sys.stderr)
         return 1

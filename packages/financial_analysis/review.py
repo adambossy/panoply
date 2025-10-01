@@ -623,12 +623,15 @@ def _select_category_for_group(
     allow_create_toggle: bool | None,
     input_fn: Callable[[str], str],
     print_fn: Callable[..., None],
-) -> str:
+) -> tuple[str, bool]:
     """Select (or create) a category for the current group.
 
     Encapsulates the interactive loop, injected selector path, creation intent
     handling, and validation against the allowed set. Loops until a valid
     category string is obtained.
+
+    Returns:
+        tuple[str, bool]: The selected category and whether it was changed from the default
     """
     options, default_category = _prepare_selector_inputs(
         allowed=allowed, default_category=chosen_default
@@ -660,13 +663,14 @@ def _select_category_for_group(
                     allowed=allowed, default_category=default_category
                 )
                 continue
-            return result
+            return result, True  # Category creation always counts as a change
 
         # Normal selection path
         if not isinstance(selected, str):
             raise TypeError(f"selector must return a string; got {type(selected).__name__}")
         resp_str = selected
         final_cat = default_category if not resp_str.strip() else resp_str.strip()
+        category_changed = final_cat != chosen_default
         if final_cat not in allowed:
             print_fn("Invalid category. Enter one of: " + ", ".join(options))
             # Refresh options in case allowed changed externally
@@ -674,12 +678,28 @@ def _select_category_for_group(
                 allowed=allowed, default_category=default_category
             )
             continue
-        return final_cat
+        return final_cat, category_changed
 
 
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
+
+
+def _format_pre_review_summary(
+    *, prefilled_groups: int, remaining_by_root: Mapping[int, int]
+) -> str:
+    """Return the one-line pre-review summary message.
+
+    Example: "Auto-applied to 3 groups; 12 groups remaining for review, largest size = 7"
+    """
+    remaining_sizes = [sz for sz in remaining_by_root.values() if sz > 0]
+    remaining_groups = len(remaining_sizes)
+    largest_group = max(remaining_sizes) if remaining_sizes else 0
+    return (
+        f"Auto-applied to {prefilled_groups} groups; {remaining_groups} groups "
+        f"remaining for review, largest size = {largest_group}"
+    )
 
 
 def review_transaction_categories(
@@ -774,6 +794,7 @@ def review_transaction_categories(
         # in-session rows immediately. Persist and mark them as finalized so the
         # main loop will skip them. Emit one concise line per key.
         prefilled_assigned: set[int] = set()
+        prefilled_groups: int = 0
         for _k, positions in by_key.items():
             if not positions:
                 continue
@@ -809,6 +830,8 @@ def review_transaction_categories(
                     transaction=prepared[p].tx, category=db_default
                 )
 
+            prefilled_groups += 1
+
             merchant_display_raw = (
                 group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
             )
@@ -822,8 +845,19 @@ def review_transaction_categories(
         # Ensure the interactive loop skips prefilled positions
         assigned |= prefilled_assigned
 
-        # Deterministic order by first index in each group
-        group_roots = sorted(groups_map.keys(), key=lambda r: min(groups_map[r]))
+        # Compute remaining counts once per group root and consider only groups
+        # with remaining items. Sort by remaining size desc, tie-breaking by
+        # first index for determinism.
+        rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
+        group_roots = [r for r, sz in rem_by_root.items() if sz > 0]
+        group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
+
+        # Summary before review starts
+        print_fn(
+            _format_pre_review_summary(
+                prefilled_groups=prefilled_groups, remaining_by_root=rem_by_root
+            )
+        )
 
         for root in group_roots:
             idxs = groups_map[root]
@@ -861,7 +895,7 @@ def review_transaction_categories(
             )
             print_fn(f"Proposed category: {chosen_default}")
 
-            final_cat = _select_category_for_group(
+            final_cat, category_changed = _select_category_for_group(
                 session=session,
                 allowed=allowed,
                 chosen_default=chosen_default,
@@ -870,23 +904,23 @@ def review_transaction_categories(
                 input_fn=input_fn,
                 print_fn=print_fn,
             )
-            # Optional rename step: propose a cleaned display-name; Enter on an
-            # empty buffer keeps the current name (no write). Esc cancels.
+            # Optional rename step: only prompt for display name when category was changed
             chosen_display: str | None = None
-            try:
-                initial = _best_display_name_candidate(group_items)
-                resp = prompt_new_display_name(initial=initial)
-                # Only treat as a rename when the operator actually changed the value;
-                # Enter on the pre-filled default should keep the current name.
-                if (
-                    isinstance(resp, str)
-                    and resp.strip()
-                    and resp.strip() != (initial or "").strip()
-                ):
-                    chosen_display = resp.strip()
-            except Exception:
-                # Non-fatal: any terminal issues should not block category saving
-                chosen_display = None
+            if category_changed:
+                try:
+                    initial = _best_display_name_candidate(group_items)
+                    resp = prompt_new_display_name(initial=initial)
+                    # Only treat as a rename when the operator actually changed the value;
+                    # Enter on the pre-filled default should keep the current name.
+                    if (
+                        isinstance(resp, str)
+                        and resp.strip()
+                        and resp.strip() != (initial or "").strip()
+                    ):
+                        chosen_display = resp.strip()
+                except Exception:
+                    # Non-fatal: any terminal issues should not block category saving
+                    chosen_display = None
 
             _persist_group(
                 session,
