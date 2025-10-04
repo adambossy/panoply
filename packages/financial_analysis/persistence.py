@@ -10,7 +10,7 @@ Scope:
 - Update category fields for categorized transactions.
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 import hashlib
 import json

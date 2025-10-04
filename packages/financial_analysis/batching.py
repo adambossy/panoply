@@ -87,8 +87,8 @@ def _settings_hash(
         "ctv_fields": list(prompting.CTV_FIELD_ORDER),
     }
     if taxonomy_hierarchy is not None:
-        # Reduce to a compact list of (code, parent_code, display_name) tuples for determinism
-        th_min = [
+        # Reduce to a compact list of (code, parent_code, display_name) dicts for determinism
+        th_min: list[dict[str, object]] = [
             {
                 "code": str(d.get("code")),
                 "parent_code": (d.get("parent_code") or None),
@@ -96,7 +96,10 @@ def _settings_hash(
             }
             for d in taxonomy_hierarchy
         ]
-        payload["taxonomy"] = sorted(th_min, key=lambda x: (x["parent_code"] or "", x["code"]))
+        payload["taxonomy"] = sorted(
+            th_min,
+            key=lambda x: (str(x.get("parent_code") or ""), str(x.get("code") or "")),
+        )
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
@@ -306,7 +309,9 @@ def spawn_background_chunk_worker(
                     ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
-                    allowed_categories=allowed_categories if allowed_categories is not None else tuple(),
+                    allowed_categories=(
+                        allowed_categories if allowed_categories is not None else tuple()
+                    ),
                     taxonomy_hierarchy=taxonomy_hierarchy,
                 )
             except Exception:

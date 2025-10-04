@@ -8,10 +8,11 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 ``financial_analysis.api`` and related modules.
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
+from collections.abc import Mapping, Sequence
 
 import typer
 from dotenv import load_dotenv
@@ -49,9 +50,6 @@ def _resolve_max_workers(n_chunks: int) -> int:
     # Default: modest parallelism to be gentle on API rate limits
     return max(1, min(8, n_chunks))
 
-
-from collections.abc import Mapping, Sequence
-from typing import Any
 
 def _compute_one(
     idx: int,
@@ -213,27 +211,33 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     try:
         with session_scope(database_url=None) as session:  # DATABASE_URL from env
             rows = session.execute(select(FaCategory)).scalars().all()
-            # Sanitize, de-duplicate, and sort deterministically
-            allowed_set = {
-                r.code.strip()
+            # Map codes to rows for quick lookup
+            code_to_row = {
+                (r.code or "").strip(): r
                 for r in rows
                 if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
             }
-            allowed_list = sorted(allowed_set)
-            if not allowed_list:
+            # Sanitize, de-duplicate, and sort deterministically
+            allowed_set = set(code_to_row.keys())
+            if not allowed_set:
                 raise RuntimeError("no valid categories present in fa_categories")
-            # Restrict taxonomy to valid codes and sort deterministically by code
+            # Select initial set and ensure parents are included when present in DB
+            selected: set[str] = set(allowed_set)
+            stack = list(selected)
+            while stack:
+                c = stack.pop()
+                parent = (getattr(code_to_row.get(c), "parent_code", None) or "").strip() or None
+                if parent and parent not in selected and parent in code_to_row:
+                    selected.add(parent)
+                    stack.append(parent)
+            allowed_list = sorted(selected)
             taxonomy: list[dict[str, Any]] = [
                 {
-                    "code": (r.code or "").strip(),
-                    "display_name": (getattr(r, "display_name", r.code) or "").strip()
-                    or (r.code or "").strip(),
-                    "parent_code": (getattr(r, "parent_code", None) or "").strip() or None,
+                    "code": c,
+                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
+                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
                 }
-                for r in sorted(rows, key=lambda x: ((getattr(x, "code", "") or "").strip()))
-                if isinstance(getattr(r, "code", None), str)
-                and r.code
-                and r.code.strip() in allowed_set
+                for c in allowed_list
             ]
     except Exception as e:
         print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
@@ -704,9 +708,50 @@ def categorize_expenses_cmd(
             print(f"Error: persistence (upsert) failed: {e}", file=sys.stderr)
             return 1
 
+    # Load allowed categories and taxonomy (requires DATABASE_URL); sanitize values
+    try:
+        with session_scope(database_url=database_url) as session:
+            rows = session.execute(select(FaCategory)).scalars().all()
+            # Map codes to rows for quick lookup
+            code_to_row = {
+                (r.code or "").strip(): r
+                for r in rows
+                if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
+            }
+            # Sanitize, de-duplicate, and sort deterministically
+            selected: set[str] = set(code_to_row.keys())
+            if not selected:
+                raise RuntimeError("no valid categories present in fa_categories")
+            # Ensure parents exist for any children present (if present in DB)
+            stack = list(selected)
+            while stack:
+                c = stack.pop()
+                parent = (getattr(code_to_row.get(c), "parent_code", None) or "").strip() or None
+                if parent and parent not in selected and parent in code_to_row:
+                    selected.add(parent)
+                    stack.append(parent)
+            allowed_list = sorted(selected)
+            taxonomy: list[dict[str, Any]] = [
+                {
+                    "code": c,
+                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
+                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+                }
+                for c in allowed_list
+            ]
+    except Exception as e:
+        print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
+        return 1
+
     # Compute categories (network-bound) outside of any DB transaction.
     try:
-        results = list(categorize_expenses(ctv_items))
+        results = list(
+            categorize_expenses(
+                ctv_items,
+                allowed_categories=tuple(allowed_list),
+                taxonomy_hierarchy=taxonomy,
+            )
+        )
     except Exception as e:
         print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
         return 1

@@ -11,7 +11,7 @@ This module builds:
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 CTV_FIELD_ORDER: tuple[str, ...] = (
@@ -89,18 +89,18 @@ def build_user_content(
     hierarchy_text = ""
     if taxonomy_hierarchy is not None:
         # Group items by parent_code; None denotes top‑level. Sort deterministically.
-        parents: list[dict[str, Any]] = sorted(
+        parents: list[Mapping[str, Any]] = sorted(
             [r for r in taxonomy_hierarchy if r.get("parent_code") in (None, "")],
             key=lambda r: (
                 str(r.get("display_name") or r.get("code") or ""),
                 str(r.get("code") or ""),
             ),
         )
-        children_by_parent: dict[str, list[dict[str, Any]]] = {}
+        children_by_parent: dict[str, list[Mapping[str, Any]]] = {}
         for r in taxonomy_hierarchy:
             pc = r.get("parent_code")
             if pc:
-                children_by_parent.setdefault(pc, []).append(r)
+                children_by_parent.setdefault(str(pc), []).append(r)
         for k, v in list(children_by_parent.items()):
             children_by_parent[k] = sorted(
                 v,
