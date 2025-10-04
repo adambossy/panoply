@@ -19,6 +19,7 @@ from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
 from openai.types.responses import ResponseTextConfigParam
+from pmap import p_map
 
 from . import prompting
 from .categorization import (
@@ -28,7 +29,6 @@ from .categorization import (
 )
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
-from .pmap import p_map
 
 # ---- Tunables (private) ------------------------------------------------------
 

@@ -10,6 +10,7 @@ dependencies = [
   "prompt_toolkit>=3.0.47",
   # Workspace DB library (SQLAlchemy engine/session + models)
   "db>=0",
+  "pmap",
 ]
 
 # Console script for `uv run categorize-expenses`
@@ -27,3 +28,6 @@ packages = ["financial_analysis"]
 
 [tool.setuptools.package-dir]
 financial_analysis = "."
+
+[tool.uv.sources]
+pmap = { workspace = true }
