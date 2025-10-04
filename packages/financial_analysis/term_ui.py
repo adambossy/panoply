@@ -230,17 +230,22 @@ def prompt_new_category_name(
     *,
     initial: str = "",
     session: PromptSession | None = None,
-    message: str = "New category name (Enter to save • Esc to cancel): ",
+    message: str = "New category name (Enter to save • Esc or Ctrl+C to cancel): ",
     error_prefix: str = "",
 ) -> str | None:
     """Collect a new category name with inline validation.
 
-    Returns the saved name, or ``None`` when canceled via Esc.
+    Returns the saved name, or ``None`` when canceled via Esc or Ctrl+C.
     """
 
     kb = KeyBindings()
 
     @kb.add("escape")
+    def _(event) -> None:  # pragma: no cover - exercised indirectly
+        event.app.exit(result=None)
+
+    # Provide an unambiguous cancel shortcut as well.
+    @kb.add("c-c", eager=True)
     def _(event) -> None:  # pragma: no cover - exercised indirectly
         event.app.exit(result=None)
 
@@ -259,7 +264,13 @@ def prompt_new_category_name(
             key_bindings=kb,
         )
 
-    return sess.prompt(message, default=initial, validator=_V(), validate_while_typing=False)
+    return sess.prompt(
+        message,
+        default=initial,
+        validator=_V(),
+        validate_while_typing=False,
+        key_bindings=kb,
+    )
 
 
 TOP_LEVEL_SENTINEL = "— Create as top-level —"

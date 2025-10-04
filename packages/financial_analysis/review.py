@@ -398,12 +398,17 @@ def _fmt_abs_amount(value: Any) -> str:
 def _intent_from_amount(value: Any) -> tuple[str, str]:
     """Map amount sign to intent (verb, preposition).
 
-    Assumes normalized sign semantics: negative = spend/outflow, non-negative =
-    income/inflow. If different connectors use different conventions, that
-    should be normalized during ingestion so presentation stays consistent.
+    Default semantics in this project treat positive amounts as card charges
+    (spend/outflow) and negative amounts as credits/refunds/payments
+    (income/inflow). This mirrors the current AmEx‑style adapters, which keep
+    charge rows as positive numbers.
+
+    If a future connector uses the opposite sign convention, normalize the
+    sign during ingestion so presentation stays consistent.
     """
     neg = _is_negative_amount(value)
-    return ("spent", "at") if neg else ("received", "from")
+    # Positive → spend at; Negative → received from
+    return ("received", "from") if neg else ("spent", "at")
 
 
 def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:

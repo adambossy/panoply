@@ -1,0 +1,20 @@
+[project]
+name = "pmap"
+version = "0.0.0"
+description = "Bounded-concurrency mapping helper for Panoply (ThreadPoolExecutor wrapper)."
+requires-python = ">=3.12,<3.13"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Ensure editable installs add `src/` to sys.path so `import pmap` resolves.
+[tool.hatch.build]
+dev-mode-dirs = ["src"]
+
+# Single-module layout: ship `src/pmap.py` as top-level module `pmap`.
+# Using `only-include` + `sources` keeps the import path clean (``from pmap import p_map``)
+# without needing an extra `pmap/` package directory under `src/`.
+[tool.hatch.build.targets.wheel]
+only-include = ["pmap.py"]
+sources = ["src"]
