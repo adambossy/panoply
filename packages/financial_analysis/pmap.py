@@ -116,8 +116,9 @@ def p_map(
                 # Top up: for each completion, try to submit one more task.
                 for _ in range(len(done)):
                     fut = _submit(pool)
-                    if fut is not None:
-                        active.add(fut)
+                    if fut is None:
+                        break
+                    active.add(fut)
 
     except Exception:
         # Let caller handle/log; no extra wrapping here to keep tracebacks clean.
