@@ -1,12 +1,5 @@
 import contextlib
 
-# Minimal test category list (ordered) for UI behavior
-TEST_ALLOWED_CATEGORIES = (
-    "Groceries",
-    "Restaurants",
-    "Coffee Shops",
-    "Other",
-)
 from financial_analysis.term_ui import select_category_or_create
 
 # Compatibility import across prompt_toolkit versions
@@ -17,6 +10,14 @@ except Exception:  # pragma: no cover - defensive
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.output import DummyOutput
+
+# Minimal test category list (ordered) for UI behavior
+TEST_ALLOWED_CATEGORIES = (
+    "Groceries",
+    "Restaurants",
+    "Coffee Shops",
+    "Other",
+)
 
 
 @contextlib.contextmanager
