@@ -1,38 +1,14 @@
-"""Result parsing, validation, and constants for categorization.
+"""Input validation and result parsing for categorization.
 
-Implements:
-- ``ALLOWED_CATEGORIES`` constant (single source of truth).
-- Pre-request input validation for CTV items.
-- Parsing/validation of the OpenAI Responses API JSON body and alignment of
-  categories by ``idx`` back to the input order.
+This module intentionally does not define any taxonomy constants. Callers must
+pass the explicit allow‑list for the current run so prompts, schemas, and
+parsing always reflect the canonical categories (from the database).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
-
-# ---------------------------------------------------------------------------
-# Category whitelist (exact casing)
-# ---------------------------------------------------------------------------
-
-ALLOWED_CATEGORIES: tuple[str, ...] = (
-    "Groceries",
-    "Restaurants",
-    "Coffee Shops",
-    "Flights",
-    "Hotels",
-    "Clothing",
-    "Shopping",
-    "Baby",
-    "House",
-    "Pet",
-    "Emergency",
-    "Medical",
-    "Other",
-)
-
-_ALLOWED_SET = set(ALLOWED_CATEGORIES)
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +40,7 @@ def parse_and_align_categories(
     body: Mapping[str, Any],
     *,
     num_items: int,
-    allowed_categories: Sequence[str] | None = None,
+    allowed_categories: Sequence[str],
     fallback_to_other: bool = True,
 ) -> list[str]:
     """Parse the Responses API JSON and return categories aligned by ``idx``.
@@ -73,7 +49,7 @@ def parse_and_align_categories(
     - ``body`` is a mapping containing a top-level key ``"results"`` whose
       value is a list of length ``num_items``.
     - Each element has ``idx`` (int), ``id`` (str | None), and ``category``
-      (str). ``category`` must be in :data:`ALLOWED_CATEGORIES`.
+      (str). ``category`` must be within the provided ``allowed_categories``.
     - Alignment is by ``idx``; duplicates or missing indices are invalid.
 
     If a ``category`` value is not allowed and ``fallback_to_other`` is True,
@@ -90,10 +66,8 @@ def parse_and_align_categories(
         raise ValueError(f"Invalid response: expected {num_items} results, got {len(results)}")
 
     categories_by_idx: list[str | None] = [None] * num_items
-    # Resolve the effective allow-list for this parse operation. When not
-    # provided, fall back to the module-level constant to preserve existing
-    # behavior for callers that don’t yet thread the taxonomy through.
-    allowed_set = set(allowed_categories) if allowed_categories is not None else _ALLOWED_SET
+    # Resolve allow‑set for validation
+    allowed_set = set(allowed_categories)
 
     for item in results:
         if not isinstance(item, Mapping):
@@ -112,7 +86,16 @@ def parse_and_align_categories(
         cat = cat_raw.strip()
         if cat not in allowed_set:
             if fallback_to_other:
-                cat = "Other"
+                # Keep fallback within the provided taxonomy
+                if "Other" in allowed_set:
+                    cat = "Other"
+                elif "Unknown" in allowed_set:
+                    cat = "Unknown"
+                else:
+                    raise ValueError(
+                        "Invalid category and no in-taxonomy fallback available: "
+                        f"{cat_raw!r}"
+                    )
             else:
                 raise ValueError(f"Invalid category value: {cat_raw!r}")
 
