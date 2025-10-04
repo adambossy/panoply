@@ -35,14 +35,13 @@ import json
 import math
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 from typing import Any
 
 from . import prompting
-from .categorization import ALLOWED_CATEGORIES
 from .categorize import _MODEL  # private, but stable within this package
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
@@ -66,26 +65,48 @@ def _get_cache_root() -> Path:
     return (Path.cwd() / ".transactions").resolve()
 
 
-def _settings_hash(allowed_categories: tuple[str, ...] | None = None) -> str:
-    """Hash model + categories + prompt schema/strings to invalidate cache on change."""
+def _settings_hash(
+    allowed_categories: tuple[str, ...],
+    *,
+    taxonomy_hierarchy: Sequence[Mapping[str, object]] | None = None,
+) -> str:
+    """Hash model + categories + prompt schema/strings to invalidate cache on change.
 
-    # Treat only None as fallback; preserve empty tuple semantics if ever passed.
-    cats = allowed_categories if allowed_categories is not None else ALLOWED_CATEGORIES
+    Includes a stable representation of the taxonomy hierarchy (when provided)
+    so cache keys roll when parent/child relationships change, even if the flat
+    allow‑list stays the same.
+    """
+
     payload = {
         "model": _MODEL,
-        "categories": list(cats),
+        "categories": list(allowed_categories),
         # Include the JSON Schema and instruction strings to capture prompt changes
-        "response_format": prompting.build_response_format(cats),
+        "response_format": prompting.build_response_format(allowed_categories),
         "system_instructions": prompting.build_system_instructions(),
         # Field order of CTV JSON also affects shape/semantics
         "ctv_fields": list(prompting.CTV_FIELD_ORDER),
     }
+    if taxonomy_hierarchy is not None:
+        # Reduce to a compact list of (code, parent_code, display_name) tuples for determinism
+        th_min = [
+            {
+                "code": str(d.get("code")),
+                "parent_code": (d.get("parent_code") or None),
+                "display_name": str(d.get("display_name") or ""),
+            }
+            for d in taxonomy_hierarchy
+        ]
+        payload["taxonomy"] = sorted(th_min, key=lambda x: (x["parent_code"] or "", x["code"]))
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def compute_dataset_id(
-    ctv_items: list[Mapping[str, Any]], *, source_provider: str, allowed_categories: tuple[str, ...] | None = None
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    source_provider: str,
+    allowed_categories: tuple[str, ...],
+    taxonomy_hierarchy: Sequence[Mapping[str, object]] | None = None,
 ) -> str:
     """Return a stable identifier for the input dataset + settings.
 
@@ -99,7 +120,7 @@ def compute_dataset_id(
     ]
     payload = {
         "fps": fps,
-        "settings": _settings_hash(allowed_categories),
+        "settings": _settings_hash(allowed_categories, taxonomy_hierarchy=taxonomy_hierarchy),
     }
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
@@ -213,7 +234,8 @@ def get_or_compute_chunk(
     *,
     source_provider: str,
     chunk_size: int = 250,
-    allowed_categories: tuple[str, ...] | None = None,
+    allowed_categories: tuple[str, ...],
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[CategorizedTransaction]:
     """Return categorized results for the ``chunk_idx`` slice.
 
@@ -227,7 +249,9 @@ def get_or_compute_chunk(
         chunk_idx=chunk_idx,
         base=base,
         end=end,
-        settings_hash=_settings_hash(allowed_categories),
+        settings_hash=_settings_hash(
+            allowed_categories, taxonomy_hierarchy=taxonomy_hierarchy
+        ),
         provider=source_provider,
     )
 
@@ -239,10 +263,13 @@ def get_or_compute_chunk(
     from .categorize import categorize_expenses
 
     slice_items = ctv_items[base:end]
-    if allowed_categories is not None:
-        results = list(categorize_expenses(slice_items, allowed_categories=allowed_categories))
-    else:
-        results = list(categorize_expenses(slice_items))
+    results = list(
+        categorize_expenses(
+            slice_items,
+            allowed_categories=allowed_categories,
+            taxonomy_hierarchy=taxonomy_hierarchy,
+        )
+    )
     # Add provider to transactions for stable fingerprinting in cache (non-destructive copy)
     to_cache: list[CategorizedTransaction] = []
     for r in results:
@@ -264,6 +291,8 @@ def spawn_background_chunk_worker(
     source_provider: str,
     chunk_size: int = 250,
     on_chunk_done: Callable[[int, float], None] | None = None,
+    allowed_categories: tuple[str, ...] | None = None,
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> Thread:
     """Start a background worker that sequentially computes chunks start..N-1."""
 
@@ -277,6 +306,8 @@ def spawn_background_chunk_worker(
                     ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
+                    allowed_categories=allowed_categories if allowed_categories is not None else tuple(),
+                    taxonomy_hierarchy=taxonomy_hierarchy,
                 )
             except Exception:
                 # Intentionally swallow to avoid crashing the main thread; the

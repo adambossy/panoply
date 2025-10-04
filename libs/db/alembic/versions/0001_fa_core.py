@@ -48,7 +48,7 @@ def upgrade() -> None:
         ),
     )
 
-    # Seed categories from financial_analysis.categorization.ALLOWED_CATEGORIES (mirrored here)
+    # Seed initial categories (bootstrap list); runtime taxonomy is managed in DB
     allowed_categories = (
         "Groceries",
         "Restaurants",

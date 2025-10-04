@@ -14,7 +14,7 @@ import json
 import math
 import random
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
@@ -22,11 +22,7 @@ from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
 from . import prompting
-from .categorization import (
-    ALLOWED_CATEGORIES,
-    ensure_valid_ctv_descriptions,
-    parse_and_align_categories,
-)
+from .categorization import ensure_valid_ctv_descriptions, parse_and_align_categories
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
 
@@ -133,6 +129,7 @@ def _build_page_payload(
     end: int,
     *,
     allowed_categories: tuple[str, ...],
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
 
@@ -158,8 +155,12 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    # Thread the allow‑list explicitly to avoid mutable global state.
-    user_content = prompting.build_user_content(ctv_json, allowed_categories=allowed_categories)
+    # Thread the allow‑list and optional hierarchy explicitly to avoid globals.
+    user_content = prompting.build_user_content(
+        ctv_json,
+        allowed_categories=allowed_categories,
+        taxonomy_hierarchy=taxonomy_hierarchy,
+    )
     return len(ctv_page), user_content
 
 
@@ -206,9 +207,14 @@ def _categorize_page(
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     allowed_categories: tuple[str, ...],
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None,
 ) -> PageResult:
     count, user_content = _build_page_payload(
-        original_seq, base, end, allowed_categories=allowed_categories
+        original_seq,
+        base,
+        end,
+        allowed_categories=allowed_categories,
+        taxonomy_hierarchy=taxonomy_hierarchy,
     )
 
     # Instantiate the client once per page and reuse across retries.
@@ -273,14 +279,39 @@ def categorize_expenses(
     transactions: Transactions,
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
-    allowed_categories: Iterable[str] | None = None,
+    allowed_categories: Iterable[str],
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> Iterable[CategorizedTransaction]:
-    """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
+    """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
 
-    Behavior notes:
+    Parameters
+    ----------
+    transactions:
+        CTV items (mappings with keys like ``id``, ``description``, ``amount``,
+        ``date``, ``merchant``, ``memo``) to categorize.
+    page_size:
+        Page size for batching requests (default 100). Must be a positive
+        integer when ``transactions`` is not empty.
+    allowed_categories:
+        Required flat allow‑list of category codes (parents and children). The
+        model's output is validated against this set. When an invalid category
+        is returned and a fallback is permitted by the parser, it will fall
+        back to ``"Other"`` or ``"Unknown"`` only if present in this list.
+    taxonomy_hierarchy:
+        Optional two‑level taxonomy (sequence of mappings with at least
+        ``code`` and ``parent_code`` keys). Used to render a concise hierarchy
+        section in the prompt so the model prefers specific child categories
+        and otherwise falls back to parents.
+
+    Returns
+    -------
+    Iterable[CategorizedTransaction]
+        One result per input item, in the same order.
+
+    Notes
+    -----
     - If ``transactions`` is empty, this function returns ``[]`` without
       validating ``page_size`` (historical contract, preserved).
-    - Otherwise ``page_size`` must be a positive integer.
     """
 
     # Progress logging intentionally omitted.
@@ -299,9 +330,15 @@ def categorize_expenses(
     system_instructions = prompting.build_system_instructions()
     # Resolve the effective allowed categories once per call and thread through
     # payload/user content, response_format, and result validation.
-    _allowed: tuple[str, ...] = (
-        tuple(allowed_categories) if allowed_categories is not None else ALLOWED_CATEGORIES
-    )
+    # Normalize and validate allowed categories (strip, drop blanks, dedupe preserving order)
+    _norm = [
+        c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()
+    ]
+    _allowed: tuple[str, ...] = tuple(dict.fromkeys(_norm))
+    if not _allowed:
+        raise ValueError(
+            "allowed_categories must be a non-empty iterable of non-blank strings"
+        )
     response_format = prompting.build_response_format(_allowed)
     # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
@@ -322,6 +359,7 @@ def categorize_expenses(
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
                     allowed_categories=_allowed,
+                    taxonomy_hierarchy=taxonomy_hierarchy,
                 )
             except Exception as e:  # noqa: BLE001
                 # Preserve ValueError semantics for validation/parse errors.
