@@ -100,7 +100,8 @@ def build_user_content(
         for r in taxonomy_hierarchy:
             pc = r.get("parent_code")
             if pc:
-                children_by_parent.setdefault(str(pc), []).append(r)
+                key = str(pc).strip()
+                children_by_parent.setdefault(key, []).append(r)
         for k, v in list(children_by_parent.items()):
             children_by_parent[k] = sorted(
                 v,
