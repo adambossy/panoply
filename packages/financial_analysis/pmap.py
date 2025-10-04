@@ -24,7 +24,7 @@ The API mirrors the parts of `p-map` we need:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import TypeVar
 
 InT = TypeVar("InT")
@@ -70,29 +70,28 @@ def p_map(
     submitted = 0
 
     # Track which future maps to which index.
-    from concurrent.futures import Future
-
     future_to_idx: dict[Future, int] = {}
 
-    def _submit(pool: ThreadPoolExecutor) -> bool:
+    def _submit(pool: ThreadPoolExecutor) -> Future | None:
         nonlocal submitted
         try:
             idx, item = next(it)
         except StopIteration:
-            return False
+            return None
         fut = pool.submit(mapper, item)
         future_to_idx[fut] = idx
         submitted += 1
-        return True
+        return fut
 
     try:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             # Prime the window
             active: set[Future] = set()
             for _ in range(concurrency):
-                if not _submit(pool):
+                fut = _submit(pool)
+                if fut is None:
                     break
-            active.update(future_to_idx.keys())
+                active.add(fut)
 
             # Drive completion/queueing until all work is done.
             while active:
@@ -116,8 +115,9 @@ def p_map(
 
                 # Top up: for each completion, try to submit one more task.
                 for _ in range(len(done)):
-                    if _submit(pool):
-                        active.add(next(reversed(future_to_idx.keys())))
+                    fut = _submit(pool)
+                    if fut is not None:
+                        active.add(fut)
 
     except Exception:
         # Let caller handle/log; no extra wrapping here to keep tracebacks clean.
@@ -125,7 +125,7 @@ def p_map(
 
     if errors:
         # Python 3.11+: group multiple errors when not failing fast.
-        raise ExceptionGroup[Exception]("p_map: one or more mapper calls failed", errors)
+        raise ExceptionGroup("p_map: one or more mapper calls failed", errors)
 
     # Stitch output in input order, skipping sentinels.
     out: list[OutT] = []
