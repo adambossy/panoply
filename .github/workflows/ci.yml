@@ -13,8 +13,11 @@ permissions:
   actions: write
   contents: read
 
+# Keep concurrency scoped to the specific commit so follow-up commits on a PR
+# don't cancel the run that produced an autofix commit. This avoids the
+# appearance of a "stuck" or failing autofix job when a replacement run starts.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -71,10 +74,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: ${{ github.event_name == 'pull_request' }}
+    # Expose whether we actually committed changes so downstream jobs can skip
+    # redundant format checks in the same run (the follow-up run will enforce it).
+    outputs:
+      committed: ${{ steps.auto_commit.outputs.changes_detected }}
     permissions:
       contents: write
+    # Make this job's concurrency unique per run to prevent a subsequent run's
+    # autofix job from canceling the current run's autofix job.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      group: ${{ github.workflow }}-${{ github.run_id }}
       cancel-in-progress: true
     steps:
       - name: Checkout (PR head)
@@ -110,6 +119,7 @@ jobs:
       - name: Commit formatting changes
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
         continue-on-error: true
+        id: auto_commit
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore(format): apply Ruff fixes"
@@ -118,14 +128,48 @@ jobs:
           branch: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  format_check:
+  format_check_pr:
     name: Format check • Ubuntu
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      group: ${{ github.workflow }}-${{ github.sha }}
+      cancel-in-progress: true
+    needs: [format_autofix_pr]
+    # Only run the read-only check when the autofix job did not push changes.
+    if: ${{ needs.format_autofix_pr.outputs.committed != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+  format_check_push:
+    name: Format check • Ubuntu
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - name: Checkout
