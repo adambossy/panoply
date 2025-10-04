@@ -52,6 +52,7 @@ def _compute_one(
     ctv_items: list,
     source_provider: str,
     chunk_size: int,
+    allowed_categories: tuple[str, ...] | None = None,
 ) -> tuple[int, list, float]:
     """Compute a single categorization chunk and return timing info.
 
@@ -71,6 +72,7 @@ def _compute_one(
             ctv_items,
             source_provider=source_provider,
             chunk_size=chunk_size,
+            allowed_categories=allowed_categories,
         )
     )
     return idx, items, time.perf_counter() - t0_local
@@ -445,7 +447,27 @@ def cmd_review_transaction_categories(
     except Exception:
         chunk_size = 250
 
-    dataset_id = compute_dataset_id(ctv_items, source_provider=source_provider)
+    # Load the canonical category list from the database and thread it through
+    # the LLM call so suggestions align with the taxonomy shown in review.
+    try:
+        from db.client import session_scope
+        from sqlalchemy import select
+        from db.models.finance import FaCategory
+        with session_scope(database_url=database_url) as session:
+            allowed_categories_list = session.scalars(
+                select(FaCategory.code).order_by(FaCategory.code)
+            ).all()
+    except Exception as e:
+        print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
+        return 1
+    if not allowed_categories_list:
+        print("Error: no categories present in fa_categories; cannot proceed", file=sys.stderr)
+        return 1
+    allowed_categories: tuple[str, ...] = tuple(allowed_categories_list)
+
+    dataset_id = compute_dataset_id(
+        ctv_items, source_provider=source_provider, allowed_categories=allowed_categories
+    )
     n_chunks = total_chunks_for(total, chunk_size=chunk_size)
 
     print()
@@ -471,6 +493,7 @@ def cmd_review_transaction_categories(
                     ctv_items=ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
+                    allowed_categories=allowed_categories,
                 )
                 fut_to_idx[fut] = k
 
