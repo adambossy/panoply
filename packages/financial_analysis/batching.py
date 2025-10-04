@@ -79,7 +79,7 @@ def _settings_hash(
 
     payload = {
         "model": _MODEL,
-        "categories": list(allowed_categories),
+        "categories": sorted(allowed_categories),
         # Include the JSON Schema and instruction strings to capture prompt changes
         "response_format": prompting.build_response_format(allowed_categories),
         "system_instructions": prompting.build_system_instructions(),
