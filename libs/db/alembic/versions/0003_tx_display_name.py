@@ -6,7 +6,7 @@ Revises: 0002_taxonomy_two_level
 Create Date: 2025-09-26
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from collections.abc import Sequence
 

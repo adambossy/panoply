@@ -172,4 +172,5 @@ The following tables are owned by this library and are created by Alembic migrat
   - B-tree index on `(category)` (`ix_fa_transactions_category`)
   - B-tree index on `(merchant)` (`ix_fa_transactions_merchant`)
 
-Categories are seeded from `financial_analysis.categorization.ALLOWED_CATEGORIES` at migration time.
+Categories are seeded by Alembic migrations in `libs/db/alembic/versions/` and
+managed in the application via the `fa_categories` table (no in-repo constants).

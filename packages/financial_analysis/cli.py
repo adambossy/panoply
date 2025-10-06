@@ -8,15 +8,21 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 ``financial_analysis.api`` and related modules.
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
+from collections.abc import Mapping, Sequence
 
 import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
-# Persistence imports are deferred inside the command to keep startup fast.
+# Move selected imports to top-level per review feedback (keeps startup reasonable)
+from db.client import session_scope  # noqa: F401  (used in commands)
+from sqlalchemy import select  # noqa: F401
+from db.models.finance import FaCategory  # noqa: F401
+
+# Persistence-heavy helpers remain imported lazily within commands to keep startup fast.
 
 from .logging_setup import configure_logging
 
@@ -52,6 +58,8 @@ def _compute_one(
     ctv_items: list,
     source_provider: str,
     chunk_size: int,
+    allowed_categories: tuple[str, ...],
+    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[int, list, float]:
     """Compute a single categorization chunk and return timing info.
 
@@ -71,6 +79,8 @@ def _compute_one(
             ctv_items,
             source_provider=source_provider,
             chunk_size=chunk_size,
+            allowed_categories=allowed_categories,
+            taxonomy_hierarchy=taxonomy_hierarchy,
         )
     )
     return idx, items, time.perf_counter() - t0_local
@@ -197,9 +207,51 @@ def cmd_categorize_expenses(csv_path: str) -> int:
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
+    # Load allowed categories and taxonomy (requires DATABASE_URL); sanitize values
+    try:
+        # Use default DATABASE_URL from environment
+        with session_scope() as session:
+            rows = session.execute(select(FaCategory)).scalars().all()
+            # Map codes to rows for quick lookup
+            code_to_row = {
+                (r.code or "").strip(): r
+                for r in rows
+                if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
+            }
+            # Sanitize, de-duplicate, and sort deterministically
+            allowed_set = set(code_to_row.keys())
+            if not allowed_set:
+                raise RuntimeError("no valid categories present in fa_categories")
+            # Select initial set and ensure parents are included when present in DB
+            selected: set[str] = set(allowed_set)
+            stack = list(selected)
+            while stack:
+                c = stack.pop()
+                parent = (getattr(code_to_row.get(c), "parent_code", None) or "").strip() or None
+                if parent and parent not in selected and parent in code_to_row:
+                    selected.add(parent)
+                    stack.append(parent)
+            allowed_list = sorted(selected)
+            taxonomy: list[dict[str, Any]] = [
+                {
+                    "code": c,
+                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
+                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+                }
+                for c in allowed_list
+            ]
+    except Exception as e:
+        print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
+        return 1
+
     # Call the categorization API and print results
     try:
-        results = list(categorize_expenses(ctv_items))
+        results = list(
+            categorize_expenses(
+                ctv_items,
+                taxonomy=taxonomy,
+            )
+        )
     except Exception as e:
         # Provide a concise message; the API validates inputs and may raise
         # ValueError/TypeError for schema or OpenAI/network issues.
@@ -445,7 +497,46 @@ def cmd_review_transaction_categories(
     except Exception:
         chunk_size = 250
 
-    dataset_id = compute_dataset_id(ctv_items, source_provider=source_provider)
+    # Load the canonical category list and the taxonomy hierarchy from the DB.
+    try:
+        with session_scope(database_url=database_url) as session:
+            rows = session.execute(select(FaCategory)).scalars().all()
+            # Sanitize, dedupe, sort deterministically
+            allowed_set = {
+                r.code.strip()
+                for r in rows
+                if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
+            }
+            allowed_categories_list = sorted(allowed_set)
+            if not allowed_categories_list:
+                print(
+                    "Error: no valid categories present in fa_categories; cannot proceed",
+                    file=sys.stderr,
+                )
+                return 1
+            taxonomy_h: list[dict[str, Any]] = [
+                {
+                    "code": (r.code or "").strip(),
+                    "display_name": (getattr(r, "display_name", r.code) or "").strip()
+                    or (r.code or "").strip(),
+                    "parent_code": (getattr(r, "parent_code", None) or "").strip() or None,
+                }
+                for r in sorted(rows, key=lambda x: ((getattr(x, "code", "") or "").strip()))
+                if isinstance(getattr(r, "code", None), str)
+                and r.code
+                and r.code.strip() in allowed_set
+            ]
+    except Exception as e:
+        print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
+        return 1
+    allowed_categories: tuple[str, ...] = tuple(allowed_categories_list)
+
+    dataset_id = compute_dataset_id(
+        ctv_items,
+        source_provider=source_provider,
+        allowed_categories=allowed_categories,
+        taxonomy_hierarchy=taxonomy_h,
+    )
     n_chunks = total_chunks_for(total, chunk_size=chunk_size)
 
     print()
@@ -471,6 +562,8 @@ def cmd_review_transaction_categories(
                     ctv_items=ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
+                    allowed_categories=allowed_categories,
+                    taxonomy_hierarchy=taxonomy_h,
                 )
                 fut_to_idx[fut] = k
 
@@ -615,9 +708,49 @@ def categorize_expenses_cmd(
             print(f"Error: persistence (upsert) failed: {e}", file=sys.stderr)
             return 1
 
+    # Load allowed categories and taxonomy (requires DATABASE_URL); sanitize values
+    try:
+        with session_scope(database_url=database_url) as session:
+            rows = session.execute(select(FaCategory)).scalars().all()
+            # Map codes to rows for quick lookup
+            code_to_row = {
+                (r.code or "").strip(): r
+                for r in rows
+                if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
+            }
+            # Sanitize, de-duplicate, and sort deterministically
+            selected: set[str] = set(code_to_row.keys())
+            if not selected:
+                raise RuntimeError("no valid categories present in fa_categories")
+            # Ensure parents exist for any children present (if present in DB)
+            stack = list(selected)
+            while stack:
+                c = stack.pop()
+                parent = (getattr(code_to_row.get(c), "parent_code", None) or "").strip() or None
+                if parent and parent not in selected and parent in code_to_row:
+                    selected.add(parent)
+                    stack.append(parent)
+            allowed_list = sorted(selected)
+            taxonomy: list[dict[str, Any]] = [
+                {
+                    "code": c,
+                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
+                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+                }
+                for c in allowed_list
+            ]
+    except Exception as e:
+        print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
+        return 1
+
     # Compute categories (network-bound) outside of any DB transaction.
     try:
-        results = list(categorize_expenses(ctv_items))
+        results = list(
+            categorize_expenses(
+                ctv_items,
+                taxonomy=taxonomy,
+            )
+        )
     except Exception as e:
         print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
         return 1
