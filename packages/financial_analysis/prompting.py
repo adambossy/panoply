@@ -65,6 +65,7 @@ def build_system_instructions() -> str:
 def build_user_content(
     ctv_json: str,
     *,
+    allowed_categories: Iterable[str] | None = None,
     taxonomy: Sequence[Mapping[str, Any]] | None = None,
     # Temporary alias to preserve compatibility with older call sites.
     taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
@@ -86,6 +87,9 @@ def build_user_content(
     # migrated yet. Prefer the new ``taxonomy`` name when both are provided.
     if taxonomy is None and taxonomy_hierarchy is not None:
         taxonomy = taxonomy_hierarchy
+
+    # Optionally render a flat allow-list only when no taxonomy is provided.
+    cats_text = "\n".join(allowed_categories) if allowed_categories else ""
 
     hierarchy_text = ""
     if taxonomy is not None:
@@ -130,13 +134,18 @@ def build_user_content(
                     lines.append(f"    - {c_name}")
         hierarchy_text = "\n".join(lines) + "\n"
 
+    header_target = "taxonomy below" if taxonomy is not None else "list below"
+    allowed_section = (
+        f"Allowed categories (flat list):\n{cats_text}\n\n" if taxonomy is None and cats_text else ""
+    )
+
     return (
-        "Task: Categorize each transaction into exactly one category from the taxonomy below.\n\n"
-        f"{hierarchy_text}"
+        f"Task: Categorize each transaction into exactly one category from the {header_target}.\n\n"
+        f"{allowed_section}{hierarchy_text}"
         "Rules:\n"
         "- Choose only one category for each transaction.\n"
         "- Prefer the most specific child; if no child fits, pick the best parent.\n"
-        "- If neither level fits, use 'Other' or 'Unknown' only if present in the taxonomy.\n"
+        "- If neither level fits, use 'Other' or 'Unknown' only if present in the taxonomy/list.\n"
         "- Keep input order. Use the provided idx field to align responses.\n"
         "- Respond with JSON only, following the specified schema. No extra text.\n\n"
         "- Categorize every transaction in your output. DON'T DROP ANY TRANSACTIONS.\n"

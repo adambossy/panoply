@@ -128,6 +128,7 @@ def _build_page_payload(
     base: int,
     end: int,
     *,
+    allowed_categories: tuple[str, ...],
     taxonomy: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
@@ -154,8 +155,10 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    # Thread only the taxonomy context; the flat allow‑list is not rendered.
-    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
+    # Thread taxonomy context; render a flat allow‑list only when taxonomy is absent.
+    user_content = prompting.build_user_content(
+        ctv_json, allowed_categories=allowed_categories if taxonomy is None else None, taxonomy=taxonomy
+    )
     return len(ctv_page), user_content
 
 
@@ -208,6 +211,7 @@ def _categorize_page(
         original_seq,
         base,
         end,
+        allowed_categories=allowed_categories,
         taxonomy=taxonomy,
     )
 
