@@ -209,7 +209,8 @@ def cmd_categorize_expenses(csv_path: str) -> int:
 
     # Load allowed categories and taxonomy (requires DATABASE_URL); sanitize values
     try:
-        with session_scope(database_url=None) as session:  # DATABASE_URL from env
+        # Use default DATABASE_URL from environment
+        with session_scope() as session:
             rows = session.execute(select(FaCategory)).scalars().all()
             # Map codes to rows for quick lookup
             code_to_row = {
