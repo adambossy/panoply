@@ -6,8 +6,6 @@ they're easy to test in isolation.
 """
 
 from __future__ import annotations
-
-import inspect
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -15,6 +13,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.styles import Style
 from prompt_toolkit.validation import ValidationError, Validator
 
@@ -101,11 +101,14 @@ def select_category_or_create(
     kb = KeyBindings()
     _menu_opened = False
     _menu_index = 0
+    # Enable first-keystroke replace behavior only when a non-empty default is provided.
+    replace_mode = bool(default and isinstance(default, str) and default != "")
 
     @kb.add("down", eager=True)
     def _(event) -> None:  # pragma: no cover - integration path
-        nonlocal _menu_opened, _menu_index
+        nonlocal _menu_opened, _menu_index, replace_mode
         b = event.app.current_buffer
+        replace_mode = False
         if b.complete_state is None:
             b.start_completion(select_first=True)
             _menu_opened = True
@@ -129,8 +132,9 @@ def select_category_or_create(
 
     @kb.add("tab", eager=True)
     def _(event) -> None:  # pragma: no cover
-        nonlocal _menu_opened, _menu_index
+        nonlocal _menu_opened, _menu_index, replace_mode
         b = event.app.current_buffer
+        replace_mode = False
         s = getattr(b, "suggestion", None)
         suggestion_text = getattr(s, "text", None)
         # Ignore creation affordance which starts with two spaces
@@ -193,28 +197,104 @@ def select_category_or_create(
             key_bindings=kb,
         )
 
-    # Start with an empty buffer so the first keystroke doesn't append to the
-    # suggested default. Show the suggestion as a placeholder when supported,
-    # and treat blank Enter as "accept the default" to preserve UX.
-    # Compose kwargs once; detect support for `placeholder` via introspection.
+    # First‑keystroke behavior with a pre-filled default value
+    # -------------------------------------------------------
+    # Requirements (issue #81):
+    # - Cursor should start after the last character of the initial suggestion.
+    # - On the first keystroke:
+    #     * Backspace or Space: build on the suggestion (standard edit/insert).
+    #     * Any other printable character: replace the entire suggestion with that char.
+    # - After any navigation/editing (Left/Right/Home/End/Delete/Ctrl-A/Ctrl-E),
+    #   future typing should behave normally (no wholesale replace).
+
+    @kb.add("backspace", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        b = event.app.current_buffer
+        # Backspace always deletes a char; on first backspace we just flip the mode.
+        b.delete_before_cursor(1)
+        replace_mode = False
+
+    # Navigation/editing keys disable replace mode and perform the usual action.
+    @kb.add("left", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_left(1)
+
+    @kb.add("right", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_right(1)
+
+    @kb.add("home", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_home()
+
+    @kb.add("end", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_end()
+
+    @kb.add("delete", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.delete(1)
+
+    @kb.add("c-a", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_home()
+
+    @kb.add("c-e", eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        replace_mode = False
+        event.app.current_buffer.cursor_end()
+
+    # Printable characters: intercept only while in replace mode so we don't
+    # duplicate default insertion behavior after the first keystroke.
+    @kb.add(Keys.Any, filter=Condition(lambda: replace_mode), eager=True)
+    def _(event) -> None:  # pragma: no cover
+        nonlocal replace_mode
+        data = getattr(event, "data", "") or ""
+        # Only act on printable characters; let control/meta fall through.
+        if not data or not data.isprintable():
+            return
+        b = event.app.current_buffer
+        if data == " ":
+            # Build on the suggestion by inserting a space.
+            b.insert_text(" ")
+            replace_mode = False
+            return
+        # Replace entire suggestion with the first character typed.
+        b.delete_before_cursor(len(b.document.text_before_cursor))
+        b.delete(len(b.document.text_after_cursor))
+        b.insert_text(data)
+        replace_mode = False
+
+    # Compose prompt kwargs with a real default so the cursor is at the end.
     prompt_kwargs: dict[str, Any] = {
         "message": message,
         "completer": completer,
-        "default": "",
+        "default": default if isinstance(default, str) else "",
         "key_bindings": kb,
         "auto_suggest": auto_suggest,
         "style": style,
     }
-    supports_placeholder = "placeholder" in inspect.signature(sess.prompt).parameters
-    if supports_placeholder and isinstance(default, str) and default:
-        prompt_kwargs["placeholder"] = default
-    elif isinstance(default, str) and default:
-        prompt_kwargs["message"] = f"{message} [{default}]"
 
     result = sess.prompt(**prompt_kwargs)
 
     # Interpret result
     # Empty input (e.g., immediate Enter) accepts the proposed default.
+    # This path remains for safety, though with a pre-filled default the buffer
+    # won't be empty under normal interactive use.
     if result == "":
         result = default if isinstance(default, str) and default != "" else ""
     if allow_create:
