@@ -128,8 +128,7 @@ def _build_page_payload(
     base: int,
     end: int,
     *,
-    allowed_categories: tuple[str, ...],
-    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None,
+    taxonomy: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
 
@@ -155,12 +154,8 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    # Thread the allow‑list and optional hierarchy explicitly to avoid globals.
-    user_content = prompting.build_user_content(
-        ctv_json,
-        allowed_categories=allowed_categories,
-        taxonomy_hierarchy=taxonomy_hierarchy,
-    )
+    # Thread only the taxonomy context; the flat allow‑list is not rendered.
+    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
     return len(ctv_page), user_content
 
 
@@ -207,14 +202,13 @@ def _categorize_page(
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     allowed_categories: tuple[str, ...],
-    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None,
+    taxonomy: Sequence[Mapping[str, Any]] | None,
 ) -> PageResult:
     count, user_content = _build_page_payload(
         original_seq,
         base,
         end,
-        allowed_categories=allowed_categories,
-        taxonomy_hierarchy=taxonomy_hierarchy,
+        taxonomy=taxonomy,
     )
 
     # Instantiate the client once per page and reuse across retries.
@@ -279,7 +273,9 @@ def categorize_expenses(
     transactions: Transactions,
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
-    allowed_categories: Iterable[str],
+    allowed_categories: Iterable[str] | None = None,
+    taxonomy: Sequence[Mapping[str, Any]] | None = None,
+    # Back-compat alias: prefer ``taxonomy`` when both are provided.
     taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
@@ -328,17 +324,36 @@ def categorize_expenses(
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
+    # Prefer the new ``taxonomy`` name; accept the legacy ``taxonomy_hierarchy`` as alias.
+    if taxonomy is None and taxonomy_hierarchy is not None:
+        taxonomy = taxonomy_hierarchy
+
     # Resolve the effective allowed categories once per call and thread through
-    # payload/user content, response_format, and result validation.
-    # Normalize and validate allowed categories (strip, drop blanks, dedupe preserving order)
-    _norm = [
-        c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()
-    ]
-    _allowed: tuple[str, ...] = tuple(dict.fromkeys(_norm))
-    if not _allowed:
-        raise ValueError(
-            "allowed_categories must be a non-empty iterable of non-blank strings"
-        )
+    # response_format and result validation (not rendered in the prompt).
+    _allowed: tuple[str, ...]
+    if allowed_categories is None:
+        # Derive from taxonomy when no explicit allow-list is provided.
+        if taxonomy is None:
+            raise ValueError(
+                "Either allowed_categories or taxonomy must be provided to categorize_expenses"
+            )
+        _norm = [
+            str(d.get("code") or "").strip() for d in taxonomy if isinstance(d, Mapping)
+        ]
+        _norm = [c for c in _norm if c]
+        _allowed = tuple(dict.fromkeys(_norm))
+        if not _allowed:
+            raise ValueError("taxonomy produced an empty set of category codes")
+    else:
+        # Normalize and validate allowed categories (strip, drop blanks, dedupe preserving order)
+        _norm = [
+            c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()
+        ]
+        _allowed = tuple(dict.fromkeys(_norm))
+        if not _allowed:
+            raise ValueError(
+                "allowed_categories must be a non-empty iterable of non-blank strings"
+            )
     response_format = prompting.build_response_format(_allowed)
     # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
@@ -359,7 +374,7 @@ def categorize_expenses(
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
                     allowed_categories=_allowed,
-                    taxonomy_hierarchy=taxonomy_hierarchy,
+                    taxonomy=taxonomy,
                 )
             except Exception as e:  # noqa: BLE001
                 # Preserve ValueError semantics for validation/parse errors.

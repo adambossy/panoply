@@ -249,8 +249,7 @@ def cmd_categorize_expenses(csv_path: str) -> int:
         results = list(
             categorize_expenses(
                 ctv_items,
-                allowed_categories=tuple(allowed_list),
-                taxonomy_hierarchy=taxonomy,
+                taxonomy=taxonomy,
             )
         )
     except Exception as e:
@@ -749,8 +748,7 @@ def categorize_expenses_cmd(
         results = list(
             categorize_expenses(
                 ctv_items,
-                allowed_categories=tuple(allowed_list),
-                taxonomy_hierarchy=taxonomy,
+                taxonomy=taxonomy,
             )
         )
     except Exception as e:
