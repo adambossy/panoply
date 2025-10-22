@@ -1,0 +1,485 @@
+---
+---
+
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<title>Code Review Tool</title>
+		<style>
+			* {
+				margin: 0;
+				padding: 0;
+				box-sizing: border-box;
+			}
+
+			body {
+				font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+				background: #1e1e1e;
+				color: #d4d4d4;
+				height: 100vh;
+				overflow: hidden;
+			}
+
+			.container {
+				display: flex;
+				flex-direction: column;
+				height: 100vh;
+			}
+
+			.header {
+				background: #2d2d30;
+				padding: 1rem 2rem;
+				border-bottom: 1px solid #3e3e42;
+			}
+
+			.header h1 {
+				font-size: 1.5rem;
+				font-weight: 600;
+				color: #ffffff;
+			}
+
+			.content {
+				display: flex;
+				flex: 1;
+				overflow: hidden;
+			}
+
+			.pane {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden;
+			}
+
+			.pane-header {
+				background: #2d2d30;
+				padding: 0.75rem 1rem;
+				border-bottom: 1px solid #3e3e42;
+				font-weight: 600;
+				font-size: 0.9rem;
+			}
+
+			.pane-content {
+				flex: 1;
+				overflow: auto;
+				padding: 1rem;
+			}
+
+			.diagram-pane {
+				border-right: 1px solid #3e3e42;
+			}
+
+			.diff-pane {
+				background: #1e1e1e;
+			}
+
+			#mermaid-diagram {
+				width: 100%;
+				height: 100%;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.diff-content {
+				font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+				font-size: 0.875rem;
+				line-height: 1.5;
+				white-space: pre-wrap;
+			}
+
+			.diff-file {
+				margin-bottom: 2rem;
+			}
+
+			.diff-file-header {
+				background: #2d2d30;
+				padding: 0.5rem 1rem;
+				border-radius: 4px 4px 0 0;
+				font-weight: 600;
+				border: 1px solid #3e3e42;
+				border-bottom: none;
+			}
+
+			.diff-lines {
+				border: 1px solid #3e3e42;
+				border-radius: 0 0 4px 4px;
+				overflow: hidden;
+			}
+
+			.diff-line {
+				padding: 2px 1rem;
+				display: flex;
+			}
+
+			.line-number {
+				min-width: 50px;
+				text-align: right;
+				padding-right: 1rem;
+				color: #858585;
+				user-select: none;
+			}
+
+			.line-content {
+				flex: 1;
+			}
+
+			.diff-line.addition {
+				background: #1e3c1e;
+			}
+
+			.diff-line.deletion {
+				background: #4b1818;
+			}
+
+			.diff-line.context {
+				background: #1e1e1e;
+			}
+
+			.addition .line-content {
+				color: #4ec9b0;
+			}
+
+			.deletion .line-content {
+				color: #f48771;
+			}
+
+			.node-highlight {
+				background: #264f78 !important;
+				box-shadow: 0 0 0 2px #0e639c;
+			}
+
+			.controls {
+				background: #2d2d30;
+				padding: 1rem;
+				border-bottom: 1px solid #3e3e42;
+			}
+
+			.file-input-wrapper {
+				display: flex;
+				gap: 1rem;
+				align-items: center;
+			}
+
+			input[type="file"] {
+				display: none;
+			}
+
+			.file-label {
+				background: #0e639c;
+				color: white;
+				padding: 0.5rem 1rem;
+				border-radius: 4px;
+				cursor: pointer;
+				font-size: 0.875rem;
+				transition: background 0.2s;
+			}
+
+			.file-label:hover {
+				background: #1177bb;
+			}
+
+			.file-name {
+				color: #cccccc;
+				font-size: 0.875rem;
+			}
+
+			.loading {
+				color: #cccccc;
+				text-align: center;
+				padding: 2rem;
+			}
+
+			.error {
+				color: #f48771;
+				padding: 1rem;
+				background: #4b1818;
+				border-radius: 4px;
+				margin: 1rem;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<div class="header">
+				<h1>Code Review Tool</h1>
+			</div>
+
+			<div class="controls">
+				<div class="file-input-wrapper">
+					<label for="diff-file" class="file-label">
+						Load Git Diff
+					</label>
+					<input type="file" id="diff-file" accept=".diff,.patch,.txt" />
+					<span class="file-name" id="file-name">No file selected</span>
+				</div>
+			</div>
+
+			<div class="content">
+				<div class="pane diagram-pane">
+					<div class="pane-header">Dataflow Diagram</div>
+					<div class="pane-content">
+						<div id="mermaid-diagram">
+							<div class="loading">Load a git diff file to see the dataflow diagram</div>
+						</div>
+					</div>
+				</div>
+
+				<div class="pane diff-pane">
+					<div class="pane-header">Diff Details</div>
+					<div class="pane-content">
+						<div id="diff-content" class="diff-content">
+							<div class="loading">Select a node in the diagram to see the relevant diff</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script type="module">
+			import mermaid from 'mermaid';
+
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: 'dark',
+				themeVariables: {
+					darkMode: true,
+					background: '#1e1e1e',
+					primaryColor: '#0e639c',
+					primaryTextColor: '#d4d4d4',
+					primaryBorderColor: '#3e3e42',
+					lineColor: '#858585',
+					secondaryColor: '#2d2d30',
+					tertiaryColor: '#1e1e1e',
+				}
+			});
+
+			let parsedDiff = null;
+			let currentDiagram = null;
+
+			// File input handling
+			const fileInput = document.getElementById('diff-file');
+			const fileName = document.getElementById('file-name');
+			const mermaidContainer = document.getElementById('mermaid-diagram');
+			const diffContainer = document.getElementById('diff-content');
+
+			fileInput.addEventListener('change', async (e) => {
+				const file = e.target.files[0];
+				if (!file) return;
+
+				fileName.textContent = file.name;
+				mermaidContainer.innerHTML = '<div class="loading">Analyzing diff...</div>';
+
+				try {
+					const content = await file.text();
+					parsedDiff = parseDiff(content);
+					currentDiagram = generateMermaidDiagram(parsedDiff);
+					await renderDiagram(currentDiagram);
+					setupInteractivity();
+				} catch (error) {
+					mermaidContainer.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+					console.error('Error processing diff:', error);
+				}
+			});
+
+			// Parse git diff
+			function parseDiff(diffText) {
+				const files = [];
+				const lines = diffText.split('\n');
+				let currentFile = null;
+				let currentHunk = null;
+
+				for (let i = 0; i < lines.length; i++) {
+					const line = lines[i];
+
+					// New file
+					if (line.startsWith('diff --git')) {
+						if (currentFile) {
+							files.push(currentFile);
+						}
+						const match = line.match(/diff --git a\/(.+?) b\/(.+)/);
+						currentFile = {
+							oldPath: match?.[1] || '',
+							newPath: match?.[2] || '',
+							hunks: [],
+							additions: 0,
+							deletions: 0,
+						};
+						currentHunk = null;
+					}
+					// File paths
+					else if (line.startsWith('---')) {
+						if (currentFile) {
+							currentFile.oldPath = line.substring(4).replace(/^a\//, '');
+						}
+					}
+					else if (line.startsWith('+++')) {
+						if (currentFile) {
+							currentFile.newPath = line.substring(4).replace(/^b\//, '');
+						}
+					}
+					// Hunk header
+					else if (line.startsWith('@@')) {
+						const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@(.*)/);
+						currentHunk = {
+							oldStart: parseInt(match?.[1] || '0'),
+							oldLines: parseInt(match?.[2] || '1'),
+							newStart: parseInt(match?.[3] || '0'),
+							newLines: parseInt(match?.[4] || '1'),
+							header: match?.[5]?.trim() || '',
+							lines: [],
+						};
+						if (currentFile) {
+							currentFile.hunks.push(currentHunk);
+						}
+					}
+					// Hunk content
+					else if (currentHunk && (line.startsWith('+') || line.startsWith('-') || line.startsWith(' '))) {
+						const type = line[0] === '+' ? 'addition' : line[0] === '-' ? 'deletion' : 'context';
+						currentHunk.lines.push({
+							type,
+							content: line.substring(1),
+						});
+						if (type === 'addition' && currentFile) currentFile.additions++;
+						if (type === 'deletion' && currentFile) currentFile.deletions++;
+					}
+				}
+
+				if (currentFile) {
+					files.push(currentFile);
+				}
+
+				return { files };
+			}
+
+			// Generate Mermaid diagram from diff
+			function generateMermaidDiagram(diff) {
+				if (!diff || !diff.files || diff.files.length === 0) {
+					return 'graph TD\n    A[No changes detected]';
+				}
+
+				let diagram = 'graph TD\n';
+				const nodes = new Map();
+				let nodeId = 0;
+
+				diff.files.forEach((file, fileIndex) => {
+					const fileName = file.newPath || file.oldPath;
+					const shortName = fileName.split('/').pop();
+					const id = `file${nodeId++}`;
+
+					nodes.set(fileName, { id, file, fileIndex });
+
+					const changeType = file.additions > 0 && file.deletions > 0 ? 'modified' :
+									   file.additions > 0 ? 'added' : 'deleted';
+					const symbol = changeType === 'modified' ? '±' :
+								   changeType === 'added' ? '+' : '-';
+
+					diagram += `    ${id}["${shortName}<br/>${symbol}${file.additions + file.deletions} lines"]\n`;
+					diagram += `    style ${id} fill:#0e639c,stroke:#1177bb,color:#fff\n`;
+				});
+
+				// Try to infer relationships based on imports or function calls
+				diff.files.forEach((file, fileIndex) => {
+					const fileName = file.newPath || file.oldPath;
+					const currentNode = nodes.get(fileName);
+
+					// Look for imports or dependencies in the diff
+					file.hunks.forEach(hunk => {
+						hunk.lines.forEach(line => {
+							if (line.type === 'addition' &&
+								(line.content.includes('import') ||
+								 line.content.includes('require') ||
+								 line.content.includes('from '))) {
+
+								// Try to match with other files in the diff
+								nodes.forEach((targetNode, targetFile) => {
+									if (targetFile !== fileName) {
+										const targetShort = targetFile.split('/').pop().replace(/\.(js|ts|py|java|go)$/, '');
+										if (line.content.includes(targetShort)) {
+											diagram += `    ${currentNode.id} --> ${targetNode.id}\n`;
+										}
+									}
+								});
+							}
+						});
+					});
+				});
+
+				return diagram;
+			}
+
+			// Render Mermaid diagram
+			async function renderDiagram(diagramCode) {
+				mermaidContainer.innerHTML = '';
+				const { svg } = await mermaid.render('diagram', diagramCode);
+				mermaidContainer.innerHTML = svg;
+			}
+
+			// Setup interactivity
+			function setupInteractivity() {
+				const nodes = mermaidContainer.querySelectorAll('.node');
+
+				nodes.forEach((node, index) => {
+					node.style.cursor = 'pointer';
+					node.addEventListener('click', () => {
+						// Remove previous highlights
+						nodes.forEach(n => n.classList.remove('node-highlight'));
+
+						// Highlight clicked node
+						node.classList.add('node-highlight');
+
+						// Show corresponding diff
+						if (parsedDiff && parsedDiff.files[index]) {
+							displayDiff(parsedDiff.files[index]);
+						}
+					});
+				});
+			}
+
+			// Display diff for selected file
+			function displayDiff(file) {
+				let html = `<div class="diff-file">`;
+				html += `<div class="diff-file-header">${file.newPath || file.oldPath}</div>`;
+				html += `<div class="diff-lines">`;
+
+				file.hunks.forEach(hunk => {
+					let oldLine = hunk.oldStart;
+					let newLine = hunk.newStart;
+
+					hunk.lines.forEach(line => {
+						const lineClass = line.type;
+						let lineNum = '';
+
+						if (line.type === 'deletion') {
+							lineNum = oldLine++;
+						} else if (line.type === 'addition') {
+							lineNum = newLine++;
+						} else {
+							lineNum = newLine++;
+							oldLine++;
+						}
+
+						html += `<div class="diff-line ${lineClass}">`;
+						html += `<span class="line-number">${lineNum}</span>`;
+						html += `<span class="line-content">${escapeHtml(line.content)}</span>`;
+						html += `</div>`;
+					});
+				});
+
+				html += `</div></div>`;
+				diffContainer.innerHTML = html;
+			}
+
+			// Escape HTML
+			function escapeHtml(text) {
+				const div = document.createElement('div');
+				div.textContent = text;
+				return div.innerHTML;
+			}
+		</script>
+	</body>
+</html>
