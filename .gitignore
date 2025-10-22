@@ -209,3 +209,15 @@ __marimo__/
 
 # Transactions
 .transactions
+
+# Node.js / NPM
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Astro build output
+dist/
+.astro/
