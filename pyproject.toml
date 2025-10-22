@@ -45,6 +45,8 @@ db = { workspace = true }
 [tool.uv.workspace]
 # All packages and libraries in the workspace live under these directories.
 members = ["packages/*", "libs/*"]
+# Exclude non-Python packages (e.g., Node.js/Astro projects)
+exclude = ["packages/code-review"]
 
 # Intentionally omit a build backend at the workspace root so `uv` doesn't try to
 # build/install a root distribution. Workspace packages live under `packages/*` and

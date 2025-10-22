@@ -22,3 +22,4 @@ Notes
 - Add only the runtime deps a package needs (e.g., `fastapi`, `uvicorn[standard]`, `openai`).
 - Depend on the shared DB library with `db` in `[project.dependencies]` when needed.
 - Declare a CLI command in `[project.scripts]`, pointing to a Typer `app` in `src/<package_name>/cli.py`.
+- Non-Python packages (e.g., Node.js/Astro projects) should be excluded from the uv workspace in the root `pyproject.toml`.
