@@ -13,6 +13,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+from openai.types.responses.response_format_text_json_schema_config_param import (
+    ResponseFormatTextJSONSchemaConfigParam,
+)
 
 CTV_FIELD_ORDER: tuple[str, ...] = (
     "idx",
@@ -141,7 +144,9 @@ def build_user_content(
     )
 
 
-def build_response_format(taxonomy: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def build_response_format(
+    taxonomy: Sequence[Mapping[str, Any]]
+) -> ResponseFormatTextJSONSchemaConfigParam:
     """Return the strict JSON Schema response_format object from taxonomy.
 
     Schema shape:
@@ -180,7 +185,7 @@ def build_response_format(taxonomy: Sequence[Mapping[str, Any]]) -> dict[str, An
     if not codes:
         raise ValueError("taxonomy must contain at least one non-blank 'code'")
 
-    return {
+    result: ResponseFormatTextJSONSchemaConfigParam = {
         # Shape aligns with openai.types.responses.ResponseFormatTextJSONSchemaConfigParam
         "type": "json_schema",
         "name": "expense_categories",
@@ -206,3 +211,4 @@ def build_response_format(taxonomy: Sequence[Mapping[str, Any]]) -> dict[str, An
         },
         "strict": True,
     }
+    return result
