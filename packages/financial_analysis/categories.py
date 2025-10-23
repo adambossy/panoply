@@ -340,7 +340,7 @@ def load_taxonomy_from_db(*, database_url: str | None) -> list[dict[str, Any]]:
             "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
             "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
         }
-        for c in sorted(code_to_row.keys())
+        for c in code_to_row.keys()
     ]
 
     # Stable hierarchy ordering: parent_code first (None/blank at top), then code
