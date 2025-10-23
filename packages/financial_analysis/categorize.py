@@ -218,9 +218,7 @@ def _categorize_page(
         dict.fromkeys(
             c
             for c in (
-                (str(d.get("code") or "").strip())
-                for d in taxonomy
-                if isinstance(d, Mapping)
+                (str(d.get("code") or "").strip()) for d in taxonomy if isinstance(d, Mapping)
             )
             if c
         )

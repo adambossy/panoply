@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+
 from openai.types.responses.response_format_text_json_schema_config_param import (
     ResponseFormatTextJSONSchemaConfigParam,
 )
