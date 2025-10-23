@@ -333,7 +333,7 @@ def categorize_expenses(
     # Build response schema from taxonomy
     response_format = prompting.build_response_format(taxonomy)
     text_cfg = ResponseTextConfigParam(
-        format=cast(ResponseFormatTextJSONSchemaConfigParam, response_format)
+        format=response_format,
     )
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
