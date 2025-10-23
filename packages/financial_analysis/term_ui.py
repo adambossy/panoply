@@ -6,6 +6,7 @@ they're easy to test in isolation.
 """
 
 from __future__ import annotations
+
 from collections.abc import Iterable, Sequence
 from typing import Any
 
