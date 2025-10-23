@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
+from db.client import session_scope
+from db.models.finance import FaCategory
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -281,9 +283,6 @@ def load_taxonomy_from_db(*, database_url: str | None) -> list[dict[str, Any]]:
     deterministically by (parent_code or "", code) to keep prompts and schema
     enums stable.
     """
-
-    from db.client import session_scope  # local import to avoid CLI import-time cost
-    from db.models.finance import FaCategory  # local import
 
     with session_scope(database_url=database_url) as session:
         rows = session.execute(select(FaCategory)).scalars().all()
