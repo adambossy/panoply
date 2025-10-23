@@ -77,7 +77,7 @@ jobs:
     # Expose whether we actually committed changes so downstream jobs can skip
     # redundant format checks in the same run (the follow-up run will enforce it).
     outputs:
-      committed: ${{ steps.auto_commit.outputs.changes_detected }}
+      committed: ${{ steps.auto_commit.outputs.pushed }}
     permissions:
       contents: write
     # Make this job's concurrency unique per run to prevent a subsequent run's
@@ -130,7 +130,7 @@ jobs:
 
   format_check_pr:
     name: Format check • Ubuntu
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' && needs.format_autofix_pr.outputs.committed != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -140,7 +140,6 @@ jobs:
       cancel-in-progress: true
     needs: [format_autofix_pr]
     # Only run the read-only check when the autofix job did not push changes.
-    if: ${{ needs.format_autofix_pr.outputs.committed != 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
