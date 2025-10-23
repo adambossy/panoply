@@ -136,7 +136,9 @@ def build_user_content(
 
     header_target = "taxonomy below" if taxonomy is not None else "list below"
     allowed_section = (
-        f"Allowed categories (flat list):\n{cats_text}\n\n" if taxonomy is None and cats_text else ""
+        ("Allowed categories (flat list):\n" + cats_text + "\n\n")
+        if taxonomy is None and cats_text
+        else ""
     )
 
     return (

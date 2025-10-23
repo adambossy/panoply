@@ -77,7 +77,8 @@ def _settings_hash(
     allow‑list stays the same.
     """
 
-    payload = {
+    # Use a wide value type to allow heterogeneous entries (lists, dicts, strings)
+    payload: dict[str, object] = {
         "model": _MODEL,
         "categories": sorted(allowed_categories),
         # Include the JSON Schema and instruction strings to capture prompt changes
@@ -96,10 +97,10 @@ def _settings_hash(
             }
             for d in taxonomy_hierarchy
         ]
-        payload["taxonomy"] = sorted(
-            th_min,
-            key=lambda x: (str(x.get("parent_code") or ""), str(x.get("code") or "")),
-        )
+        def _taxonomy_sort_key(x: Mapping[str, object]) -> tuple[str, str]:
+            return (str(x.get("parent_code") or ""), str(x.get("code") or ""))
+
+        payload["taxonomy"] = sorted(th_min, key=_taxonomy_sort_key)
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
@@ -252,9 +253,7 @@ def get_or_compute_chunk(
         chunk_idx=chunk_idx,
         base=base,
         end=end,
-        settings_hash=_settings_hash(
-            allowed_categories, taxonomy_hierarchy=taxonomy_hierarchy
-        ),
+        settings_hash=_settings_hash(allowed_categories, taxonomy_hierarchy=taxonomy_hierarchy),
         provider=source_provider,
     )
 

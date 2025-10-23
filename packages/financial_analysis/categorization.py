@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Input validation (pre-request)
 # ---------------------------------------------------------------------------
@@ -93,8 +92,7 @@ def parse_and_align_categories(
                     cat = "Unknown"
                 else:
                     raise ValueError(
-                        "Invalid category and no in-taxonomy fallback available: "
-                        f"{cat_raw!r}"
+                        f"Invalid category and no in-taxonomy fallback available: {cat_raw!r}"
                     )
             else:
                 raise ValueError(f"Invalid category value: {cat_raw!r}")

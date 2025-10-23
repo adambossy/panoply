@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
+
 # Move selected imports to top-level per review feedback (keeps startup reasonable)
 from db.client import session_scope  # noqa: F401  (used in commands)
 from sqlalchemy import select  # noqa: F401
@@ -235,8 +236,12 @@ def cmd_categorize_expenses(csv_path: str) -> int:
             taxonomy: list[dict[str, Any]] = [
                 {
                     "code": c,
-                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
-                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+                    "display_name": (
+                        (getattr(code_to_row[c], "display_name", c) or "").strip() or c
+                    ),
+                    "parent_code": (
+                        (getattr(code_to_row[c], "parent_code", None) or "").strip() or None
+                    ),
                 }
                 for c in allowed_list
             ]
@@ -734,8 +739,12 @@ def categorize_expenses_cmd(
             taxonomy: list[dict[str, Any]] = [
                 {
                     "code": c,
-                    "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
-                    "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+                    "display_name": (
+                        (getattr(code_to_row[c], "display_name", c) or "").strip() or c
+                    ),
+                    "parent_code": (
+                        (getattr(code_to_row[c], "parent_code", None) or "").strip() or None
+                    ),
                 }
                 for c in allowed_list
             ]

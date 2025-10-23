@@ -157,7 +157,9 @@ def _build_page_payload(
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
     # Thread taxonomy context; render a flat allow‑list only when taxonomy is absent.
     user_content = prompting.build_user_content(
-        ctv_json, allowed_categories=allowed_categories if taxonomy is None else None, taxonomy=taxonomy
+        ctv_json,
+        allowed_categories=(allowed_categories if taxonomy is None else None),
+        taxonomy=taxonomy,
     )
     return len(ctv_page), user_content
 
@@ -341,23 +343,17 @@ def categorize_expenses(
             raise ValueError(
                 "Either allowed_categories or taxonomy must be provided to categorize_expenses"
             )
-        _norm = [
-            str(d.get("code") or "").strip() for d in taxonomy if isinstance(d, Mapping)
-        ]
+        _norm = [str(d.get("code") or "").strip() for d in taxonomy if isinstance(d, Mapping)]
         _norm = [c for c in _norm if c]
         _allowed = tuple(dict.fromkeys(_norm))
         if not _allowed:
             raise ValueError("taxonomy produced an empty set of category codes")
     else:
         # Normalize and validate allowed categories (strip, drop blanks, dedupe preserving order)
-        _norm = [
-            c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()
-        ]
+        _norm = [c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()]
         _allowed = tuple(dict.fromkeys(_norm))
         if not _allowed:
-            raise ValueError(
-                "allowed_categories must be a non-empty iterable of non-blank strings"
-            )
+            raise ValueError("allowed_categories must be a non-empty iterable of non-blank strings")
     response_format = prompting.build_response_format(_allowed)
     # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
