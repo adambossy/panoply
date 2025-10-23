@@ -852,16 +852,34 @@ def review_transaction_categories(
         assigned |= prefilled_assigned
 
         # Compute remaining counts once per group root and consider only groups
-        # with remaining items. Sort by remaining size desc, tie-breaking by
-        # first index for determinism.
+        # with remaining items.
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
-        group_roots = [r for r, sz in rem_by_root.items() if sz > 0]
+        group_roots_all = [r for r, sz in rem_by_root.items() if sz > 0]
+
+        # Confidence gate (Issue #88): include only groups whose effective score > 0.7
+        # Effective score prefers revised_score when present; else score; missing -> None.
+        def _effective_score_for_group(root: int) -> float | None:
+            idxs = groups_map[root]
+            if not idxs:
+                return None
+            # Use first representative; categorize phase assigns one decision per group.
+            item = final[prepared[idxs[0]].pos]
+            llm = getattr(item, "llm", None)
+            if llm is None:
+                return None
+            return llm.revised_score if llm.revised_score is not None else llm.score
+
+        MIN_CONFIDENCE = 0.7
+        group_roots = [
+            r for r in group_roots_all if (_effective_score_for_group(r) or 0.0) > MIN_CONFIDENCE
+        ]
         group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
         # Summary before review starts
+        gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         print_fn(
             _format_pre_review_summary(
-                prefilled_groups=prefilled_groups, remaining_by_root=rem_by_root
+                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
             )
         )
 

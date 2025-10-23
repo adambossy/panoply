@@ -14,6 +14,7 @@ import json
 import math
 import random
 import time
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
@@ -22,13 +23,16 @@ from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
 from . import prompting
-from .categorization import ensure_valid_ctv_descriptions, parse_and_align_categories
+from .categorization import (
+    ensure_valid_ctv_descriptions,
+    parse_and_align_category_details,
+)
 from .logging_setup import get_logger
-from .models import CategorizedTransaction, Transactions
+from .models import CategorizedTransaction, LLMCategoryDetails, Transactions
 
 # ---- Tunables (private) ------------------------------------------------------
 
-_PAGE_SIZE_DEFAULT: int = 100
+_PAGE_SIZE_DEFAULT: int = 10
 _CONCURRENCY: int = 4
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
@@ -189,26 +193,37 @@ def _sleep_backoff(attempt_no: int) -> None:
 
 class PageResult(NamedTuple):
     page_index: int
-    base: int
-    categories: list[str]
+    # List of (group_root_abs_index, parsed_result_dict)
+    results: list[tuple[int, dict[str, Any]]]
 
 
 def _categorize_page(
     page_index: int,
     *,
-    base: int,
-    end: int,
+    exemplar_abs_indices: list[int],  # absolute indices into original_seq
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> PageResult:
-    count, user_content = _build_page_payload(
-        original_seq,
-        base,
-        end,
-        taxonomy=taxonomy,
-    )
+    # Build the page payload from exemplars only; keep page-relative idx
+    ctv_page: list[dict[str, Any]] = []
+    for page_idx, abs_i in enumerate(exemplar_abs_indices):
+        record = original_seq[abs_i]
+        ctv_page.append(
+            {
+                "idx": page_idx,  # page-relative index
+                "id": record.get("id"),
+                "description": record.get("description"),
+                "amount": record.get("amount"),
+                "date": record.get("date"),
+                "merchant": record.get("merchant"),
+                "memo": record.get("memo"),
+            }
+        )
+    ctv_json = prompting.serialize_ctv_to_json(ctv_page)
+    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
+    count = len(ctv_page)
 
     # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
     allowed: tuple[str, ...] = tuple(
@@ -232,23 +247,29 @@ def _categorize_page(
                 instructions=system_instructions,
                 input=user_content,
                 text=text_cfg,
+                tools=[{"type": "web_search"}],
+                tool_choice="auto",
             )
             decoded = _extract_response_json_mapping(resp)
-            page_categories = parse_and_align_categories(
+            detailed = parse_and_align_category_details(
                 decoded, num_items=count, allowed_categories=allowed
             )
-            return PageResult(page_index=page_index, base=base, categories=page_categories)
+            # Map page-relative results back to absolute exemplar indices
+            out: list[tuple[int, dict[str, Any]]] = []
+            for page_idx, item in enumerate(detailed):
+                abs_index = exemplar_abs_indices[page_idx]
+                out.append((abs_index, item))
+            return PageResult(page_index=page_index, results=out)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
             # Retry scope narrowed to 429/5xx only.
             if attempt >= _MAX_ATTEMPTS or not _is_retryable(e):
                 _logger.error(
                     (
-                        "categorize_expenses:page_failed_terminal page_index=%d base=%d "
-                        "count=%d latency_ms=%.2f error=%s"
+                        "categorize_expenses:page_failed_terminal page_index=%d exemplars=%d "
+                        "latency_ms=%.2f error=%s"
                     ),
                     page_index,
-                    base,
                     count,
                     dt_ms,
                     e.__class__.__name__,
@@ -257,16 +278,14 @@ def _categorize_page(
                     # Parsing/validation failures are terminal (no retries)
                     raise e
                 raise RuntimeError(
-                    f"categorize_expenses failed for page {page_index} "
-                    f"(base={base}, count={count}): {e}"
+                    f"categorize_expenses failed for page {page_index} (exemplars={count}): {e}"
                 ) from e
             _logger.warning(
                 (
-                    "categorize_expenses:page_retry page_index=%d base=%d count=%d "
+                    "categorize_expenses:page_retry page_index=%d count=%d "
                     "latency_ms=%.2f error=%s attempt=%d"
                 ),
                 page_index,
-                base,
                 count,
                 dt_ms,
                 e.__class__.__name__,
@@ -322,7 +341,32 @@ def categorize_expenses(
     if not isinstance(page_size, int) or page_size <= 0:
         raise ValueError("page_size must be a positive integer")
 
-    # Determine pages lazily via _paginate(); no need to precompute total count.
+    # Group before LLM: normalize merchant/description; pick one exemplar per group
+    def _norm_merchant_key(tx: Mapping[str, Any]) -> str | None:
+        raw = tx.get("merchant") or tx.get("description")
+        if raw is None:
+            return None
+        s = unicodedata.normalize("NFKC", str(raw)).strip()
+        if not s:
+            return None
+        return " ".join(s.split()).casefold()
+
+    by_key: dict[str, list[int]] = {}
+    singleton_indices: list[int] = []
+    for i, tx in enumerate(original_seq):
+        k = _norm_merchant_key(tx)
+        if k is None:
+            singleton_indices.append(i)
+        else:
+            by_key.setdefault(k, []).append(i)
+    # Deterministic exemplar per group: the smallest absolute index
+    exemplars: list[int] = []
+    for idxs in by_key.values():
+        exemplars.append(min(idxs))
+    exemplars.extend(singleton_indices)  # singletons act as their own group
+    exemplars.sort()
+
+    n_groups = len(exemplars)
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
@@ -333,37 +377,38 @@ def categorize_expenses(
         format=response_format,
     )
 
-    categories_by_abs_idx: list[str | None] = [None] * n_total
+    # Hold per-group parsed details keyed by exemplar absolute index
+    group_details_by_exemplar: dict[int, dict[str, Any]] = {}
 
     try:
-        pages_iter = _paginate(n_total, page_size)
+        # Build pages over exemplars
+        pages: list[list[int]] = []
+        for _, base, end in _paginate(n_groups, page_size):
+            pages.append(exemplars[base:end])
 
-        def _map_page(t: tuple[int, int, int]) -> PageResult:
-            page_index, base, end = t
+        def _map_page(page_index_and_indices: tuple[int, list[int]]) -> PageResult:
+            page_index, indices = page_index_and_indices
             try:
                 return _categorize_page(
                     page_index,
-                    base=base,
-                    end=end,
+                    exemplar_abs_indices=indices,
                     original_seq=original_seq,
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
                     taxonomy=taxonomy,
                 )
             except Exception as e:  # noqa: BLE001
-                # Preserve ValueError semantics for validation/parse errors.
                 if isinstance(e, ValueError):
                     raise
-                raise RuntimeError(
-                    f"categorize_expenses failed for page_index={page_index} base={base} end={end}"
-                ) from e
+                raise RuntimeError(f"categorize_expenses failed for page_index={page_index}") from e
 
+        page_inputs: list[tuple[int, list[int]]] = [(i, pg) for i, pg in enumerate(pages)]
         page_results: list[PageResult] = p_map(
-            pages_iter, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
+            page_inputs, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
         )
         for page in page_results:
-            for i, cat in enumerate(page.categories):
-                categories_by_abs_idx[page.base + i] = cat
+            for exemplar_abs_idx, item in page.results:
+                group_details_by_exemplar[exemplar_abs_idx] = item
     except Exception as e:
         _logger.error(
             "categorize_expenses:pmap_exception error=%s error_type=%s",
@@ -372,12 +417,40 @@ def categorize_expenses(
         )
         raise
 
-    missing = [i for i, v in enumerate(categories_by_abs_idx) if v is None]
-    if missing:  # pragma: no cover - defensive
-        raise RuntimeError(f"Internal error: missing categories at indices {missing}")
-
+    # Fan out group-level decisions to all members
     results: list[CategorizedTransaction] = []
-    for i in range(n_total):
-        category: str = cast(str, categories_by_abs_idx[i])
-        results.append(CategorizedTransaction(transaction=original_seq[i], category=category))
+    # Precompute mapping from exemplar -> member indices (including itself)
+    members_by_exemplar: dict[int, list[int]] = {ex: [] for ex in exemplars}
+    for idxs in by_key.values():
+        root = min(idxs)
+        members_by_exemplar[root].extend(idxs)
+    for i in singleton_indices:
+        members_by_exemplar[i].append(i)
+
+    # Fill results with defaults to preserve order, then set via groups
+    results = [CategorizedTransaction(transaction=tx, category="Unknown") for tx in original_seq]
+
+    for exemplar_abs_idx, members in members_by_exemplar.items():
+        details = group_details_by_exemplar.get(exemplar_abs_idx)
+        if details is None:  # pragma: no cover - defensive
+            # Should not happen; treat as Unknown
+            cat_effective = "Unknown"
+            llm_details = None
+        else:
+            cat = cast(str, details.get("category"))
+            revised_cat = details.get("revised_category")
+            cat_effective = cast(str, (revised_cat or cat))
+            llm_details = LLMCategoryDetails(
+                rationale=cast(str | None, details.get("rationale")),
+                score=cast(float | None, details.get("score")),
+                revised_category=cast(str | None, details.get("revised_category")),
+                revised_rationale=cast(str | None, details.get("revised_rationale")),
+                revised_score=cast(float | None, details.get("revised_score")),
+                citations=tuple(details.get("citations") or []) or None,
+            )
+        for m in members:
+            results[m] = CategorizedTransaction(
+                transaction=original_seq[m], category=cat_effective, llm=llm_details
+            )
+
     return results

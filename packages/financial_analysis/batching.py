@@ -46,6 +46,8 @@ from .categorize import _MODEL  # private, but stable within this package
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
 
+SCHEMA_VERSION: int = 2
+
 # ----------------------------------------------------------------------------
 # Cache roots and dataset identity
 # ----------------------------------------------------------------------------
@@ -162,7 +164,7 @@ def _read_chunk_from_cache(
         raw = json.loads(path.read_text(encoding="utf-8"))
         if (
             not isinstance(raw, dict)
-            or raw.get("schema_version") != 1
+            or raw.get("schema_version") != SCHEMA_VERSION
             or raw.get("dataset_id") != meta.dataset_id
             or raw.get("chunk_index") != meta.chunk_idx
             or raw.get("base") != meta.base
@@ -180,6 +182,7 @@ def _read_chunk_from_cache(
                 return None
             fp = ent.get("fp")
             cat = ent.get("category")
+            # Minimal validation: fp and category required; llm details optional
             if not isinstance(fp, str) or not isinstance(cat, str):
                 return None
             tx = ctv_items[meta.base + i]
@@ -193,7 +196,22 @@ def _read_chunk_from_cache(
         out: list[CategorizedTransaction] = []
         for i, ent in enumerate(items):
             tx = ctv_items[meta.base + i]
-            out.append(CategorizedTransaction(transaction=tx, category=ent["category"]))
+            llm = None
+            # Optional llm details
+            details = ent.get("llm")
+            if isinstance(details, dict):
+                from .models import LLMCategoryDetails
+
+                citations = details.get("citations")
+                llm = LLMCategoryDetails(
+                    rationale=details.get("rationale"),
+                    score=details.get("score"),
+                    revised_category=details.get("revised_category"),
+                    revised_rationale=details.get("revised_rationale"),
+                    revised_score=details.get("revised_score"),
+                    citations=tuple(citations) if isinstance(citations, list) else None,
+                )
+            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], llm=llm))
         return out
     except Exception:
         return None
@@ -202,21 +220,32 @@ def _read_chunk_from_cache(
 def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction]) -> None:
     path = _chunk_path(meta.dataset_id, meta.chunk_idx)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    payload = {
-        "schema_version": 1,
+    items_out: list[dict[str, Any]] = []
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
         "dataset_id": meta.dataset_id,
         "chunk_index": meta.chunk_idx,
         "base": meta.base,
         "end": meta.end,
         "settings_hash": meta.settings_hash,
-        "items": [
-            {
-                "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
-                "category": item.category,
-            }
-            for item in items
-        ],
+        "items": items_out,
     }
+    for item in items:
+        entry: dict[str, Any] = {
+            "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
+            "category": item.category,
+        }
+        llm = getattr(item, "llm", None)
+        if llm is not None:
+            entry["llm"] = {
+                "rationale": llm.rationale,
+                "score": llm.score,
+                "revised_category": llm.revised_category,
+                "revised_rationale": llm.revised_rationale,
+                "revised_score": llm.revised_score,
+                "citations": list(llm.citations) if llm.citations else None,
+            }
+        items_out.append(entry)
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
