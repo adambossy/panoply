@@ -252,42 +252,6 @@ def list_top_level_categories(session: Session) -> list[CategoryDict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def list_categories_hierarchical(session: Session) -> list[CategoryDict]:
-    """Return all categories in hierarchical order (parents followed by their children).
-
-    The returned list is flat but ordered for easy rendering. Each element
-    includes ``parent_code``; callers can group by that field to build a tree.
-    Fetches all rows in a single query to avoid N+1 queries.
-    """
-    from collections import defaultdict
-
-    from db.models.finance import FaCategory  # local import
-
-    rows = (
-        session.execute(
-            select(FaCategory).order_by(
-                func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    by_parent: dict[str | None, list] = defaultdict(list)
-    parents: list = []
-    for r in rows:
-        if getattr(r, "parent_code", None) is None:
-            parents.append(r)
-        else:
-            by_parent[r.parent_code].append(r)
-
-    out: list[CategoryDict] = []
-    for p in parents:
-        out.append(_row_to_dict(p))
-        out.extend(_row_to_dict(c) for c in by_parent.get(p.code, []))
-    return out
-
-
 # PEP8-friendly alias (optional)
 create_category = createCategory
 
@@ -297,7 +261,6 @@ __all__ = [
     "createCategory",
     "create_category",
     "list_top_level_categories",
-    "list_categories_hierarchical",
     "load_taxonomy_from_db",
     "NameValidation",
     "CategoryDict",
