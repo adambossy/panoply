@@ -283,11 +283,9 @@ def _categorize_page(
 
 def categorize_expenses(
     transactions: Transactions,
+    taxonomy: Sequence[Mapping[str, Any]],
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
-    taxonomy: Sequence[Mapping[str, Any]] | None = None,
-    # Back‑compat alias: accept legacy "taxonomy_hierarchy" for callers.
-    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
 
@@ -296,14 +294,14 @@ def categorize_expenses(
     transactions:
         CTV items (mappings with keys like ``id``, ``description``, ``amount``,
         ``date``, ``merchant``, ``memo``) to categorize.
-    page_size:
-        Page size for batching requests (default 100). Must be a positive
-        integer when ``transactions`` is not empty.
     taxonomy:
         Required two‑level taxonomy (sequence of mappings with at least
         ``code`` and ``parent_code`` keys). Used to build both the JSON Schema
         enum and a concise hierarchy section in the prompt so the model prefers
         specific child categories and otherwise falls back to parents.
+    page_size:
+        Page size for batching requests (default 100). Must be a positive
+        integer when ``transactions`` is not empty.
 
     Returns
     -------
@@ -330,12 +328,6 @@ def categorize_expenses(
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
-    # Prefer the new ``taxonomy`` name; accept the legacy ``taxonomy_hierarchy`` as alias.
-    if taxonomy is None and taxonomy_hierarchy is not None:
-        taxonomy = taxonomy_hierarchy
-
-    if taxonomy is None:
-        raise ValueError("taxonomy must be provided to categorize_expenses")
 
     # Build response schema from taxonomy
     response_format = prompting.build_response_format(taxonomy)

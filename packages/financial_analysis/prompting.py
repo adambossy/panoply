@@ -64,10 +64,7 @@ def build_system_instructions() -> str:
 
 def build_user_content(
     ctv_json: str,
-    *,
-    taxonomy: Sequence[Mapping[str, Any]] | None = None,
-    # Temporary alias to preserve compatibility with older call sites.
-    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> str:
     """Build user content including an optional two‑level taxonomy section.
 
@@ -76,59 +73,53 @@ def build_user_content(
     ctv_json:
         JSON array of page CTV items (with page‑relative ``idx`` fields).
     taxonomy:
-        Optional sequence of mappings having at least ``code`` and
+        Sequence of mappings having at least ``code`` and
         ``parent_code`` keys. When provided, a concise hierarchy section is
         included so the model can prefer children and fall back to parents
         when needed.
     """
-
-    # Back-compat: allow the old parameter name for callers that haven't
-    # migrated yet. Prefer the new ``taxonomy`` name when both are provided.
-    if taxonomy is None and taxonomy_hierarchy is not None:
-        taxonomy = taxonomy_hierarchy
-
     hierarchy_text = ""
-    if taxonomy is not None:
-        # Group items by parent_code; None denotes top‑level. Sort deterministically.
-        parents: list[Mapping[str, Any]] = sorted(
-            [r for r in taxonomy if r.get("parent_code") in (None, "")],
-            key=lambda r: (
-                str(r.get("display_name") or r.get("code") or ""),
-                str(r.get("code") or ""),
+
+    # Group items by parent_code; None denotes top‑level. Sort deterministically.
+    parents: list[Mapping[str, Any]] = sorted(
+        [r for r in taxonomy if r.get("parent_code") in (None, "")],
+        key=lambda r: (
+            str(r.get("display_name") or r.get("code") or ""),
+            str(r.get("code") or ""),
+        ),
+    )
+    children_by_parent: dict[str, list[Mapping[str, Any]]] = {}
+    for r in taxonomy:
+        pc = r.get("parent_code")
+        if pc:
+            key = str(pc).strip()
+            children_by_parent.setdefault(key, []).append(r)
+    for k, v in list(children_by_parent.items()):
+        children_by_parent[k] = sorted(
+            v,
+            key=lambda c: (
+                str(c.get("display_name") or c.get("code") or ""),
+                str(c.get("code") or ""),
             ),
         )
-        children_by_parent: dict[str, list[Mapping[str, Any]]] = {}
-        for r in taxonomy:
-            pc = r.get("parent_code")
-            if pc:
-                key = str(pc).strip()
-                children_by_parent.setdefault(key, []).append(r)
-        for k, v in list(children_by_parent.items()):
-            children_by_parent[k] = sorted(
-                v,
-                key=lambda c: (
-                    str(c.get("display_name") or c.get("code") or ""),
-                    str(c.get("code") or ""),
-                ),
-            )
 
-        lines: list[str] = [
-            "\nTaxonomy (two levels):",
-            "- Prefer a child when it clearly fits; otherwise use the parent.",
-        ]
-        for p in parents:
-            p_code = str(p.get("code"))
-            p_name = str(p.get("display_name") or p_code)
-            # Show only display names to avoid redundant repetition.
-            lines.append(f"  • {p_name}")
-            kids = children_by_parent.get(p_code, [])
-            if kids:
-                # Compact one-per-line to keep prompts small and deterministic
-                for c in kids:
-                    c_code = str(c.get("code"))
-                    c_name = str(c.get("display_name") or c_code)
-                    lines.append(f"    - {c_name}")
-        hierarchy_text = "\n".join(lines) + "\n"
+    lines: list[str] = [
+        "\nTaxonomy (two levels):",
+        "- Prefer a child when it clearly fits; otherwise use the parent.",
+    ]
+    for p in parents:
+        p_code = str(p.get("code"))
+        p_name = str(p.get("display_name") or p_code)
+        # Show only display names to avoid redundant repetition.
+        lines.append(f"  • {p_name}")
+        kids = children_by_parent.get(p_code, [])
+        if kids:
+            # Compact one-per-line to keep prompts small and deterministic
+            for c in kids:
+                c_code = str(c.get("code"))
+                c_name = str(c.get("display_name") or c_code)
+                lines.append(f"    - {c_name}")
+    hierarchy_text = "\n".join(lines) + "\n"
 
     header_target = "taxonomy below"
 
