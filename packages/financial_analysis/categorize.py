@@ -331,8 +331,7 @@ def categorize_expenses(
 
     # Build response schema from taxonomy
     response_format = prompting.build_response_format(taxonomy)
-    # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
-    text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
+    text_cfg = ResponseTextConfigParam(format=response_format)
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
