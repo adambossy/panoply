@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Any, TypedDict
 
+from db.client import session_scope
+from db.models.finance import FaCategory
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -252,42 +254,6 @@ def list_top_level_categories(session: Session) -> list[CategoryDict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def list_categories_hierarchical(session: Session) -> list[CategoryDict]:
-    """Return all categories in hierarchical order (parents followed by their children).
-
-    The returned list is flat but ordered for easy rendering. Each element
-    includes ``parent_code``; callers can group by that field to build a tree.
-    Fetches all rows in a single query to avoid N+1 queries.
-    """
-    from collections import defaultdict
-
-    from db.models.finance import FaCategory  # local import
-
-    rows = (
-        session.execute(
-            select(FaCategory).order_by(
-                func.coalesce(FaCategory.sort_order, 10_000), FaCategory.display_name
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    by_parent: dict[str | None, list] = defaultdict(list)
-    parents: list = []
-    for r in rows:
-        if getattr(r, "parent_code", None) is None:
-            parents.append(r)
-        else:
-            by_parent[r.parent_code].append(r)
-
-    out: list[CategoryDict] = []
-    for p in parents:
-        out.append(_row_to_dict(p))
-        out.extend(_row_to_dict(c) for c in by_parent.get(p.code, []))
-    return out
-
-
 # PEP8-friendly alias (optional)
 create_category = createCategory
 
@@ -297,8 +263,48 @@ __all__ = [
     "createCategory",
     "create_category",
     "list_top_level_categories",
-    "list_categories_hierarchical",
+    "load_taxonomy_from_db",
     "NameValidation",
     "CategoryDict",
     "CreateCategoryResult",
 ]
+
+
+def load_taxonomy_from_db(*, database_url: str | None) -> list[dict[str, Any]]:
+    """Return a normalized two-level taxonomy from ``fa_categories``.
+
+    The result is a list of dicts with keys:
+    - ``code``: canonical code (stripped),
+    - ``display_name``: non-empty human-friendly name (stripped, falls back to code),
+    - ``parent_code``: optional parent code (stripped or ``None``).
+
+    Blank/non-string codes are dropped. Duplicate codes are de-duplicated with
+    last-write-wins semantics (per table ordering). The list is sorted
+    deterministically by (parent_code or "", code) to keep prompts and schema
+    enums stable.
+    """
+
+    with session_scope(database_url=database_url) as session:
+        rows = session.execute(select(FaCategory)).scalars().all()
+
+    # Map codes to rows to sanitize and de-duplicate by code
+    code_to_row: dict[str, Any] = {
+        (r.code or "").strip(): r
+        for r in rows
+        if isinstance(getattr(r, "code", None), str) and r.code and r.code.strip()
+    }
+    if not code_to_row:
+        raise RuntimeError("no valid categories present in fa_categories")
+
+    taxonomy: list[dict[str, Any]] = [
+        {
+            "code": c,
+            "display_name": (getattr(code_to_row[c], "display_name", c) or "").strip() or c,
+            "parent_code": (getattr(code_to_row[c], "parent_code", None) or "").strip() or None,
+        }
+        for c in code_to_row.keys()
+    ]
+
+    # Stable hierarchy ordering: parent_code first (None/blank at top), then code
+    taxonomy.sort(key=lambda d: (str(d.get("parent_code") or ""), str(d.get("code") or "")))
+    return taxonomy

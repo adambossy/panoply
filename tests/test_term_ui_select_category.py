@@ -1,6 +1,5 @@
 import contextlib
 
-from financial_analysis.categorization import ALLOWED_CATEGORIES
 from financial_analysis.term_ui import select_category_or_create
 
 # Compatibility import across prompt_toolkit versions
@@ -11,6 +10,14 @@ except Exception:  # pragma: no cover - defensive
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.output import DummyOutput
+
+# Minimal test category list (ordered) for UI behavior
+TEST_ALLOWED_CATEGORIES = (
+    "Groceries",
+    "Restaurants",
+    "Coffee Shops",
+    "Other",
+)
 
 
 @contextlib.contextmanager
@@ -26,7 +33,7 @@ def test_select_category_or_create_accepts_default_with_enter():
     with pipe_session() as (pipe, sess):
         pipe.send_text("\r")  # Enter
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == default
 
@@ -39,7 +46,7 @@ def test_select_category_or_create_change_via_completion():
         # Ctrl-A (home), Ctrl-K (kill to end), type full target, Enter
         pipe.send_text("\x01\x0bRestaurants\r")
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == target
 
@@ -53,7 +60,7 @@ def test_down_arrow_or_tab_opens_dropdown_and_enter_accepts():
         pipe.send_text("\x01\x0b")  # Ctrl-A, Ctrl-K to clear
         pipe.send_text("\t\r")  # Open via Tab, then Enter to accept first item
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == "Groceries"
 
@@ -64,7 +71,7 @@ def test_inline_suggestion_tab_autocompletes_prefix():
     with pipe_session() as (pipe, sess):
         pipe.send_text("\x01\x0bGro\t\r")  # Clear, type 'Gro', Tab to complete, Enter
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == "Groceries"
 
@@ -75,7 +82,7 @@ def test_inline_suggestion_enter_commits_prefix_completion():
     with pipe_session() as (pipe, sess):
         pipe.send_text("\x01\x0bRes\r")  # Clear, type 'Res', Enter (should become Restaurants)
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == "Restaurants"
 
@@ -85,6 +92,6 @@ def test_exact_category_enter_returns_exact_value():
     with pipe_session() as (pipe, sess):
         pipe.send_text("\x01\x0bCoffee Shops\r")
         result = select_category_or_create(
-            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+            list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == "Coffee Shops"

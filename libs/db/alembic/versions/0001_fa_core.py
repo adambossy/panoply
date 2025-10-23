@@ -6,7 +6,7 @@ Revises: None
 Create Date: 2025-09-07
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from collections.abc import Sequence
 
@@ -48,7 +48,7 @@ def upgrade() -> None:
         ),
     )
 
-    # Seed categories from financial_analysis.categorization.ALLOWED_CATEGORIES (mirrored here)
+    # Seed initial categories (bootstrap list); runtime taxonomy is managed in DB
     allowed_categories = (
         "Groceries",
         "Restaurants",

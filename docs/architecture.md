@@ -30,4 +30,5 @@ Created via Alembic migrations in `libs/db/alembic/versions`:
   - Column-level unique on `fingerprint_sha256`
   - Indexes: `(date)`, `(category)`, `(merchant)`
 
-`fa_categories` is seeded from `financial_analysis.categorization.ALLOWED_CATEGORIES` at migration time.
+`fa_categories` is seeded by Alembic migrations and is the sole source of
+truth for the taxonomy (the application does not keep a hardcoded list).

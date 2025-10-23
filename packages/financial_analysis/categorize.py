@@ -14,7 +14,7 @@ import json
 import math
 import random
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
@@ -22,11 +22,7 @@ from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
 from . import prompting
-from .categorization import (
-    ALLOWED_CATEGORIES,
-    ensure_valid_ctv_descriptions,
-    parse_and_align_categories,
-)
+from .categorization import ensure_valid_ctv_descriptions, parse_and_align_categories
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
 
@@ -131,6 +127,8 @@ def _build_page_payload(
     original_seq: list[Mapping[str, Any]],
     base: int,
     end: int,
+    *,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
 
@@ -156,7 +154,8 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    user_content = prompting.build_user_content(ctv_json, allowed_categories=ALLOWED_CATEGORIES)
+    # Thread taxonomy context; prompt hides the flat list when taxonomy is present.
+    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
     return len(ctv_page), user_content
 
 
@@ -202,8 +201,25 @@ def _categorize_page(
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> PageResult:
-    count, user_content = _build_page_payload(original_seq, base, end)
+    count, user_content = _build_page_payload(
+        original_seq,
+        base,
+        end,
+        taxonomy=taxonomy,
+    )
+
+    # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
+    allowed: tuple[str, ...] = tuple(
+        dict.fromkeys(
+            c
+            for c in (
+                (str(d.get("code") or "").strip()) for d in taxonomy if isinstance(d, Mapping)
+            )
+            if c
+        )
+    )
 
     # Instantiate the client once per page and reuse across retries.
     client = _create_client()
@@ -218,7 +234,9 @@ def _categorize_page(
                 text=text_cfg,
             )
             decoded = _extract_response_json_mapping(resp)
-            page_categories = parse_and_align_categories(decoded, num_items=count)
+            page_categories = parse_and_align_categories(
+                decoded, num_items=count, allowed_categories=allowed
+            )
             return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -263,15 +281,35 @@ def _categorize_page(
 
 def categorize_expenses(
     transactions: Transactions,
+    taxonomy: Sequence[Mapping[str, Any]],
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
 ) -> Iterable[CategorizedTransaction]:
-    """Categorize expenses via OpenAI Responses API (model: ``gpt-5``).
+    """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
 
-    Behavior notes:
+    Parameters
+    ----------
+    transactions:
+        CTV items (mappings with keys like ``id``, ``description``, ``amount``,
+        ``date``, ``merchant``, ``memo``) to categorize.
+    taxonomy:
+        Required two‑level taxonomy (sequence of mappings with at least
+        ``code`` and ``parent_code`` keys). Used to build both the JSON Schema
+        enum and a concise hierarchy section in the prompt so the model prefers
+        specific child categories and otherwise falls back to parents.
+    page_size:
+        Page size for batching requests (default 100). Must be a positive
+        integer when ``transactions`` is not empty.
+
+    Returns
+    -------
+    Iterable[CategorizedTransaction]
+        One result per input item, in the same order.
+
+    Notes
+    -----
     - If ``transactions`` is empty, this function returns ``[]`` without
       validating ``page_size`` (historical contract, preserved).
-    - Otherwise ``page_size`` must be a positive integer.
     """
 
     # Progress logging intentionally omitted.
@@ -288,9 +326,12 @@ def categorize_expenses(
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
-    response_format = prompting.build_response_format(ALLOWED_CATEGORIES)
-    # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
-    text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
+
+    # Build response schema from taxonomy
+    response_format = prompting.build_response_format(taxonomy)
+    text_cfg = ResponseTextConfigParam(
+        format=response_format,
+    )
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
@@ -307,6 +348,7 @@ def categorize_expenses(
                     original_seq=original_seq,
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
+                    taxonomy=taxonomy,
                 )
             except Exception as e:  # noqa: BLE001
                 # Preserve ValueError semantics for validation/parse errors.

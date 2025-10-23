@@ -8,16 +8,17 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 ``financial_analysis.api`` and related modules.
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
+from collections.abc import Mapping, Sequence
 
 import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
-# Persistence imports are deferred inside the command to keep startup fast.
 
+from .categories import load_taxonomy_from_db
 from .logging_setup import configure_logging
 
 
@@ -52,6 +53,7 @@ def _compute_one(
     ctv_items: list,
     source_provider: str,
     chunk_size: int,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, list, float]:
     """Compute a single categorization chunk and return timing info.
 
@@ -71,6 +73,7 @@ def _compute_one(
             ctv_items,
             source_provider=source_provider,
             chunk_size=chunk_size,
+            taxonomy=taxonomy,
         )
     )
     return idx, items, time.perf_counter() - t0_local
@@ -197,9 +200,21 @@ def cmd_categorize_expenses(csv_path: str) -> int:
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
+    # Load taxonomy from DB via shared helper (env DATABASE_URL is used by default)
+    try:
+        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=None)
+    except Exception as e:
+        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
+        return 1
+
     # Call the categorization API and print results
     try:
-        results = list(categorize_expenses(ctv_items))
+        results = list(
+            categorize_expenses(
+                ctv_items,
+                taxonomy=taxonomy,
+            )
+        )
     except Exception as e:
         # Provide a concise message; the API validates inputs and may raise
         # ValueError/TypeError for schema or OpenAI/network issues.
@@ -445,7 +460,17 @@ def cmd_review_transaction_categories(
     except Exception:
         chunk_size = 250
 
-    dataset_id = compute_dataset_id(ctv_items, source_provider=source_provider)
+    # Load the canonical taxonomy from the DB (uses provided database_url)
+    try:
+        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
+    except Exception as e:
+        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
+        return 1
+    dataset_id = compute_dataset_id(
+        ctv_items,
+        source_provider=source_provider,
+        taxonomy=taxonomy,
+    )
     n_chunks = total_chunks_for(total, chunk_size=chunk_size)
 
     print()
@@ -471,6 +496,7 @@ def cmd_review_transaction_categories(
                     ctv_items=ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
+                    taxonomy=taxonomy,
                 )
                 fut_to_idx[fut] = k
 
@@ -615,9 +641,21 @@ def categorize_expenses_cmd(
             print(f"Error: persistence (upsert) failed: {e}", file=sys.stderr)
             return 1
 
+    # Load taxonomy from DB via shared helper (respects provided database_url)
+    try:
+        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
+    except Exception as e:
+        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
+        return 1
+
     # Compute categories (network-bound) outside of any DB transaction.
     try:
-        results = list(categorize_expenses(ctv_items))
+        results = list(
+            categorize_expenses(
+                ctv_items,
+                taxonomy=taxonomy,
+            )
+        )
     except Exception as e:
         print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
         return 1

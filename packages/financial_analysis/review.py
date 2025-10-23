@@ -759,7 +759,8 @@ def review_transaction_categories(
     selector:
         Optional injection point for unit tests; when provided, it will be used
         to select the category instead of the interactive dropdown. The
-        callable receives ``(allowed_categories, default_category)`` and must
+        callable receives ``(allowed_codes, default_category)`` (codes derived
+        from the current taxonomy) and must
         return the chosen category string.
     allow_create:
         When ``True`` (default), enables the “Create new category” path inside

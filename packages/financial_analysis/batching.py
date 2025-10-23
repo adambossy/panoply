@@ -35,14 +35,13 @@ import json
 import math
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 from typing import Any
 
 from . import prompting
-from .categorization import ALLOWED_CATEGORIES
 from .categorize import _MODEL  # private, but stable within this package
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
@@ -66,37 +65,62 @@ def _get_cache_root() -> Path:
     return (Path.cwd() / ".transactions").resolve()
 
 
-def _settings_hash() -> str:
-    """Hash model + categories + prompt schema/strings to invalidate cache on change."""
+def _settings_hash(
+    taxonomy: Sequence[Mapping[str, object]],
+) -> str:
+    """Hash model + taxonomy + prompt schema/strings to invalidate cache on change.
 
-    payload = {
+    The taxonomy drives both the prompt (hierarchy text) and the JSON Schema
+    enum. We include a compact, normalized representation so keys roll when
+    codes, names, or relationships change.
+    """
+
+    # Compact, normalized taxonomy representation (code, parent_code, display_name)
+    th_min: list[dict[str, object]] = [
+        {
+            "code": str(d.get("code") or "").strip(),
+            "parent_code": (str(d.get("parent_code") or "").strip() or None),
+            "display_name": str(d.get("display_name") or "").strip(),
+        }
+        for d in taxonomy
+    ]
+
+    def _taxonomy_sort_key(x: Mapping[str, object]) -> tuple[str, str]:
+        return (str(x.get("parent_code") or ""), str(x.get("code") or ""))
+
+    th_sorted = sorted(th_min, key=_taxonomy_sort_key)
+
+    # Use a wide value type to allow heterogeneous entries (lists, dicts, strings)
+    payload: dict[str, object] = {
         "model": _MODEL,
-        "categories": list(ALLOWED_CATEGORIES),
         # Include the JSON Schema and instruction strings to capture prompt changes
-        "response_format": prompting.build_response_format(ALLOWED_CATEGORIES),
+        "response_format": prompting.build_response_format(th_sorted),
         "system_instructions": prompting.build_system_instructions(),
         # Field order of CTV JSON also affects shape/semantics
         "ctv_fields": list(prompting.CTV_FIELD_ORDER),
+        "taxonomy": th_sorted,
     }
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def compute_dataset_id(ctv_items: list[Mapping[str, Any]], *, source_provider: str) -> str:
+def compute_dataset_id(
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    source_provider: str,
+    taxonomy: Sequence[Mapping[str, object]],
+) -> str:
     """Return a stable identifier for the input dataset + settings.
 
     Incorporates per-transaction fingerprints (order-sensitive) and the
-    ``_settings_hash()`` so cache keys roll when the model/categories/prompts
+    ``_settings_hash()`` so cache keys roll when the model/taxonomy/prompts
     change.
     """
 
     fps: list[str] = [
         compute_fingerprint(source_provider=source_provider, tx=tx) for tx in ctv_items
     ]
-    payload = {
-        "fps": fps,
-        "settings": _settings_hash(),
-    }
+    payload = {"fps": fps, "settings": _settings_hash(taxonomy)}
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
@@ -209,6 +233,7 @@ def get_or_compute_chunk(
     *,
     source_provider: str,
     chunk_size: int = 250,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> list[CategorizedTransaction]:
     """Return categorized results for the ``chunk_idx`` slice.
 
@@ -217,12 +242,13 @@ def get_or_compute_chunk(
 
     total = len(ctv_items)
     base, end = _chunk_bounds(chunk_idx, total=total, chunk_size=chunk_size)
+    # Use taxonomy to compute settings hash
     meta = _ChunkMeta(
         dataset_id=dataset_id,
         chunk_idx=chunk_idx,
         base=base,
         end=end,
-        settings_hash=_settings_hash(),
+        settings_hash=_settings_hash(taxonomy),
         provider=source_provider,
     )
 
@@ -234,7 +260,7 @@ def get_or_compute_chunk(
     from .categorize import categorize_expenses
 
     slice_items = ctv_items[base:end]
-    results = list(categorize_expenses(slice_items))
+    results = list(categorize_expenses(slice_items, taxonomy=taxonomy))
     # Add provider to transactions for stable fingerprinting in cache (non-destructive copy)
     to_cache: list[CategorizedTransaction] = []
     for r in results:
@@ -256,6 +282,7 @@ def spawn_background_chunk_worker(
     source_provider: str,
     chunk_size: int = 250,
     on_chunk_done: Callable[[int, float], None] | None = None,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> Thread:
     """Start a background worker that sequentially computes chunks start..N-1."""
 
@@ -269,6 +296,7 @@ def spawn_background_chunk_worker(
                     ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
+                    taxonomy=taxonomy,
                 )
             except Exception:
                 # Intentionally swallow to avoid crashing the main thread; the

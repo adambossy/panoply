@@ -6,7 +6,7 @@ Revises: 0001_fa_core
 Create Date: 2025-09-25
 """
 
-from __future__ import annotations  # ruff: noqa: I001
+from __future__ import annotations
 
 from collections.abc import Sequence
 
