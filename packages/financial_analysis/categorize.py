@@ -128,7 +128,6 @@ def _build_page_payload(
     base: int,
     end: int,
     *,
-    allowed_categories: tuple[str, ...],
     taxonomy: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
@@ -155,12 +154,8 @@ def _build_page_payload(
             }
         )
     ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    # Thread taxonomy context; render a flat allow‑list only when taxonomy is absent.
-    user_content = prompting.build_user_content(
-        ctv_json,
-        allowed_categories=(allowed_categories if taxonomy is None else None),
-        taxonomy=taxonomy,
-    )
+    # Thread taxonomy context; prompt hides the flat list when taxonomy is present.
+    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
     return len(ctv_page), user_content
 
 
@@ -206,15 +201,26 @@ def _categorize_page(
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
-    allowed_categories: tuple[str, ...],
     taxonomy: Sequence[Mapping[str, Any]] | None,
 ) -> PageResult:
     count, user_content = _build_page_payload(
         original_seq,
         base,
         end,
-        allowed_categories=allowed_categories,
         taxonomy=taxonomy,
+    )
+
+    # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
+    allowed: tuple[str, ...] = tuple(
+        dict.fromkeys(
+            c
+            for c in (
+                (str(d.get("code") or "").strip())
+                for d in (taxonomy or [])
+                if isinstance(d, Mapping)
+            )
+            if c
+        )
     )
 
     # Instantiate the client once per page and reuse across retries.
@@ -231,7 +237,7 @@ def _categorize_page(
             )
             decoded = _extract_response_json_mapping(resp)
             page_categories = parse_and_align_categories(
-                decoded, num_items=count, allowed_categories=allowed_categories
+                decoded, num_items=count, allowed_categories=allowed
             )
             return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
@@ -279,9 +285,8 @@ def categorize_expenses(
     transactions: Transactions,
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
-    allowed_categories: Iterable[str] | None = None,
     taxonomy: Sequence[Mapping[str, Any]] | None = None,
-    # Back-compat alias: prefer ``taxonomy`` when both are provided.
+    # Back‑compat alias: accept legacy "taxonomy_hierarchy" for callers.
     taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
@@ -294,16 +299,11 @@ def categorize_expenses(
     page_size:
         Page size for batching requests (default 100). Must be a positive
         integer when ``transactions`` is not empty.
-    allowed_categories:
-        Required flat allow‑list of category codes (parents and children). The
-        model's output is validated against this set. When an invalid category
-        is returned and a fallback is permitted by the parser, it will fall
-        back to ``"Other"`` or ``"Unknown"`` only if present in this list.
-    taxonomy_hierarchy:
-        Optional two‑level taxonomy (sequence of mappings with at least
-        ``code`` and ``parent_code`` keys). Used to render a concise hierarchy
-        section in the prompt so the model prefers specific child categories
-        and otherwise falls back to parents.
+    taxonomy:
+        Required two‑level taxonomy (sequence of mappings with at least
+        ``code`` and ``parent_code`` keys). Used to build both the JSON Schema
+        enum and a concise hierarchy section in the prompt so the model prefers
+        specific child categories and otherwise falls back to parents.
 
     Returns
     -------
@@ -334,27 +334,11 @@ def categorize_expenses(
     if taxonomy is None and taxonomy_hierarchy is not None:
         taxonomy = taxonomy_hierarchy
 
-    # Resolve the effective allowed categories once per call and thread through
-    # response_format and result validation (not rendered in the prompt).
-    _allowed: tuple[str, ...]
-    if allowed_categories is None:
-        # Derive from taxonomy when no explicit allow-list is provided.
-        if taxonomy is None:
-            raise ValueError(
-                "Either allowed_categories or taxonomy must be provided to categorize_expenses"
-            )
-        _norm = [str(d.get("code") or "").strip() for d in taxonomy if isinstance(d, Mapping)]
-        _norm = [c for c in _norm if c]
-        _allowed = tuple(dict.fromkeys(_norm))
-        if not _allowed:
-            raise ValueError("taxonomy produced an empty set of category codes")
-    else:
-        # Normalize and validate allowed categories (strip, drop blanks, dedupe preserving order)
-        _norm = [c.strip() for c in allowed_categories if isinstance(c, str) and c.strip()]
-        _allowed = tuple(dict.fromkeys(_norm))
-        if not _allowed:
-            raise ValueError("allowed_categories must be a non-empty iterable of non-blank strings")
-    response_format = prompting.build_response_format(_allowed)
+    if taxonomy is None:
+        raise ValueError("taxonomy must be provided to categorize_expenses")
+
+    # Build response schema from taxonomy
+    response_format = prompting.build_response_format(taxonomy)
     # The OpenAI client accepts a plain dict for ``text``; this cast is for typing only.
     text_cfg: ResponseTextConfigParam = cast(ResponseTextConfigParam, {"format": response_format})
 
@@ -373,7 +357,6 @@ def categorize_expenses(
                     original_seq=original_seq,
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
-                    allowed_categories=_allowed,
                     taxonomy=taxonomy,
                 )
             except Exception as e:  # noqa: BLE001

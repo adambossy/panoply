@@ -18,21 +18,24 @@ sys.path[:0] = [p for p in [str(_PKG_DIR), str(_ROOT)] if p not in sys.path]
 import financial_analysis.categorize as categorize_mod  # noqa: E402
 from financial_analysis.categorize import categorize_expenses as _categorize_expenses  # noqa: E402
 
-# Flat test taxonomy allow‑list (parents and children). Keep small but representative.
-TEST_ALLOWED_CATEGORIES: tuple[str, ...] = (
-    "Groceries",
-    "Restaurants",
-    "Coffee Shops",
-    "Flights",
-    "Hotels",
-    "Clothing",
-    "Shopping",
-    "Baby",
-    "House",
-    "Pet",
-    "Emergency",
-    "Medical",
-    "Other",
+# Flat test taxonomy (parents only for simplicity here). Keep small but representative.
+TEST_TAXONOMY: tuple[dict[str, str | None], ...] = tuple(
+    {"code": c, "display_name": c, "parent_code": None}
+    for c in (
+        "Groceries",
+        "Restaurants",
+        "Coffee Shops",
+        "Flights",
+        "Hotels",
+        "Clothing",
+        "Shopping",
+        "Baby",
+        "House",
+        "Pet",
+        "Emergency",
+        "Medical",
+        "Other",
+    )
 )
 
 
@@ -182,18 +185,14 @@ def test_happy_path_output_text(monkeypatch: pytest.MonkeyPatch):
 
     calls = _run_with_stubbed_openai(monkeypatch, resp)
 
-    out = list(
-        _categorize_expenses(
-            transactions, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
 
     # Basic assertions
     assert len(out) == len(transactions)
     assert out[0].transaction is transactions[0]
     assert out[1].transaction is transactions[1]
-    assert out[0].category in TEST_ALLOWED_CATEGORIES
-    assert out[1].category in TEST_ALLOWED_CATEGORIES
+    assert out[0].category in [e["code"] for e in TEST_TAXONOMY]
+    assert out[1].category in [e["code"] for e in TEST_TAXONOMY]
     # Ensure inputs were not mutated (no idx added)
     assert "idx" not in transactions[0] and "idx" not in transactions[1]
 
@@ -232,16 +231,12 @@ def test_happy_path_output_content_text_fallback(monkeypatch: pytest.MonkeyPatch
 
     _run_with_stubbed_openai(monkeypatch, resp)
 
-    out = list(
-        _categorize_expenses(
-            transactions, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert len(out) == 2
     assert out[0].transaction is transactions[0]
     assert out[1].transaction is transactions[1]
-    assert out[0].category in TEST_ALLOWED_CATEGORIES
-    assert out[1].category in TEST_ALLOWED_CATEGORIES
+    assert out[0].category in [e["code"] for e in TEST_TAXONOMY]
+    assert out[1].category in [e["code"] for e in TEST_TAXONOMY]
 
 
 def test_invalid_category_falls_back_to_other(monkeypatch: pytest.MonkeyPatch):
@@ -260,11 +255,7 @@ def test_invalid_category_falls_back_to_other(monkeypatch: pytest.MonkeyPatch):
 
     _run_with_stubbed_openai(monkeypatch, resp)
 
-    out = list(
-        _categorize_expenses(
-            transactions, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert out[0].category == "Other"
     assert out[1].category == "Groceries"
 
@@ -286,11 +277,7 @@ def test_alignment_by_idx_out_of_order(monkeypatch: pytest.MonkeyPatch):
 
     _run_with_stubbed_openai(monkeypatch, resp)
 
-    out = list(
-        _categorize_expenses(
-            transactions, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     # Output order must match input order regardless of response order
     assert out[0].transaction is transactions[0]
     assert out[1].transaction is transactions[1]
@@ -320,13 +307,7 @@ def test_input_validation_empty_description_raises(monkeypatch: pytest.MonkeyPat
     _run_with_stubbed_openai(monkeypatch, resp)
 
     with pytest.raises(ValueError) as ei:
-        list(
-            _categorize_expenses(
-                transactions,
-                allowed_categories=TEST_ALLOWED_CATEGORIES,
-                taxonomy_hierarchy=None,
-            )
-        )
+        list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     msg = str(ei.value)
     assert "description" in msg and ("empty" in msg or "missing" in msg)
 
@@ -352,13 +333,7 @@ def test_input_validation_non_mapping_item_raises(monkeypatch: pytest.MonkeyPatc
     _run_with_stubbed_openai(monkeypatch, resp)
 
     with pytest.raises(TypeError) as ei:
-        list(
-            _categorize_expenses(
-                transactions,
-                allowed_categories=TEST_ALLOWED_CATEGORIES,
-                taxonomy_hierarchy=None,
-            )
-        )
+        list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert "mapping (CTV)" in str(ei.value)
 
 
@@ -375,13 +350,7 @@ def test_unexpected_responses_shape_raises(monkeypatch: pytest.MonkeyPatch):
     _run_with_stubbed_openai(monkeypatch, resp)
 
     with pytest.raises(ValueError) as ei:
-        list(
-            _categorize_expenses(
-                transactions,
-                allowed_categories=TEST_ALLOWED_CATEGORIES,
-                taxonomy_hierarchy=None,
-            )
-        )
+        list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert "Unexpected Responses API shape" in str(ei.value)
 
 
@@ -397,13 +366,7 @@ def test_malformed_json_raises(monkeypatch: pytest.MonkeyPatch):
     _run_with_stubbed_openai(monkeypatch, resp)
 
     with pytest.raises(ValueError) as ei:
-        list(
-            _categorize_expenses(
-                transactions,
-                allowed_categories=TEST_ALLOWED_CATEGORIES,
-                taxonomy_hierarchy=None,
-            )
-        )
+        list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert "not valid JSON" in str(ei.value)
 
 
@@ -419,11 +382,7 @@ def test_empty_input_returns_empty_iterable(monkeypatch: pytest.MonkeyPatch):
 
     _run_with_stubbed_openai(monkeypatch, resp)
 
-    out = list(
-        _categorize_expenses(
-            transactions, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(transactions, taxonomy=TEST_TAXONOMY))
     assert out == []
 
 
@@ -459,11 +418,7 @@ def test_pagination_call_counts_and_sizes(
     stub = _PagedOpenAIStub(calls)
     monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
-    out = list(
-        _categorize_expenses(
-            txs, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(txs, taxonomy=TEST_TAXONOMY))
 
     # Count calls and verify page sizes never exceed the default (100)
     assert len(calls) == expected_calls
@@ -498,11 +453,7 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
     monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
     # Override to a smaller page size; expect 3 calls (50, 50, 20)
-    out = list(
-        _categorize_expenses(
-            txs, page_size=50, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(txs, page_size=50, taxonomy=TEST_TAXONOMY))
     assert len(out) == n
     assert len(calls) == 3
     sizes = [len(_extract_ctv_from_user_content(c["input"])) for c in calls]
@@ -529,11 +480,7 @@ def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
     stub = _PagedOpenAIStub(calls, sleep_per_call=0.05)
     monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
-    out = list(
-        _categorize_expenses(
-            txs, allowed_categories=TEST_ALLOWED_CATEGORIES, taxonomy_hierarchy=None
-        )
-    )
+    out = list(_categorize_expenses(txs, taxonomy=TEST_TAXONOMY))
     assert len(out) == n
     # 10 pages → 10 calls
     assert len(calls) == 10

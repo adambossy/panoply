@@ -1,8 +1,9 @@
 """Input validation and result parsing for categorization.
 
-This module intentionally does not define any taxonomy constants. Callers must
-pass the explicit allow‑list for the current run so prompts, schemas, and
-parsing always reflect the canonical categories (from the database).
+This module intentionally does not define any taxonomy constants. Callers pass
+the current two‑level taxonomy to the public API; callers of this module's
+helpers derive a flat allow‑list of codes from that taxonomy for strict
+validation of model outputs.
 """
 
 from __future__ import annotations

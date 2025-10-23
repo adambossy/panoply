@@ -59,8 +59,7 @@ def _compute_one(
     ctv_items: list,
     source_provider: str,
     chunk_size: int,
-    allowed_categories: tuple[str, ...],
-    taxonomy_hierarchy: Sequence[Mapping[str, Any]] | None = None,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, list, float]:
     """Compute a single categorization chunk and return timing info.
 
@@ -80,8 +79,7 @@ def _compute_one(
             ctv_items,
             source_provider=source_provider,
             chunk_size=chunk_size,
-            allowed_categories=allowed_categories,
-            taxonomy_hierarchy=taxonomy_hierarchy,
+            taxonomy=taxonomy,
         )
     )
     return idx, items, time.perf_counter() - t0_local
@@ -534,13 +532,10 @@ def cmd_review_transaction_categories(
     except Exception as e:
         print(f"Error: failed to load categories from DB: {e}", file=sys.stderr)
         return 1
-    allowed_categories: tuple[str, ...] = tuple(allowed_categories_list)
-
     dataset_id = compute_dataset_id(
         ctv_items,
         source_provider=source_provider,
-        allowed_categories=allowed_categories,
-        taxonomy_hierarchy=taxonomy_h,
+        taxonomy=taxonomy_h,
     )
     n_chunks = total_chunks_for(total, chunk_size=chunk_size)
 
@@ -567,8 +562,7 @@ def cmd_review_transaction_categories(
                     ctv_items=ctv_items,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
-                    allowed_categories=allowed_categories,
-                    taxonomy_hierarchy=taxonomy_h,
+                    taxonomy=taxonomy_h,
                 )
                 fut_to_idx[fut] = k
 
