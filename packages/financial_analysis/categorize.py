@@ -18,10 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
-from openai.types.responses import (
-    ResponseFormatTextJSONSchemaConfigParam,
-    ResponseTextConfigParam,
-)
+from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
 from . import prompting
