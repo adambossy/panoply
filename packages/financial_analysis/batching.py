@@ -97,6 +97,7 @@ def _settings_hash(
             }
             for d in taxonomy_hierarchy
         ]
+
         def _taxonomy_sort_key(x: Mapping[str, object]) -> tuple[str, str]:
             return (str(x.get("parent_code") or ""), str(x.get("code") or ""))
 
