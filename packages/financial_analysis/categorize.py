@@ -18,7 +18,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
 from openai import OpenAI
-from openai.types.responses import ResponseTextConfigParam
+from openai.types.responses import (
+    ResponseFormatTextJSONSchemaConfigParam,
+    ResponseTextConfigParam,
+)
 from pmap import p_map
 
 from . import prompting
@@ -128,7 +131,7 @@ def _build_page_payload(
     base: int,
     end: int,
     *,
-    taxonomy: Sequence[Mapping[str, Any]] | None,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, str]:
     """Return ``(count, user_content)`` for a page slice ``[base, end)``.
 
@@ -201,7 +204,7 @@ def _categorize_page(
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
-    taxonomy: Sequence[Mapping[str, Any]] | None,
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> PageResult:
     count, user_content = _build_page_payload(
         original_seq,
@@ -216,7 +219,7 @@ def _categorize_page(
             c
             for c in (
                 (str(d.get("code") or "").strip())
-                for d in (taxonomy or [])
+                for d in taxonomy
                 if isinstance(d, Mapping)
             )
             if c
@@ -331,7 +334,9 @@ def categorize_expenses(
 
     # Build response schema from taxonomy
     response_format = prompting.build_response_format(taxonomy)
-    text_cfg = ResponseTextConfigParam(format=response_format)
+    text_cfg = ResponseTextConfigParam(
+        format=cast(ResponseFormatTextJSONSchemaConfigParam, response_format)
+    )
 
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
