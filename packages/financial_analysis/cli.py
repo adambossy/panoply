@@ -19,9 +19,6 @@ from dotenv import load_dotenv
 from typer.models import OptionInfo
 
 from .categories import load_taxonomy_from_db
-
-# Persistence-heavy helpers remain imported lazily within commands to keep startup fast.
-
 from .logging_setup import configure_logging
 
 
