@@ -145,7 +145,7 @@ def build_user_content(
 
 
 def build_response_format(
-    taxonomy: Sequence[Mapping[str, Any]]
+    taxonomy: Sequence[Mapping[str, Any]],
 ) -> ResponseFormatTextJSONSchemaConfigParam:
     """Return the strict JSON Schema response_format object from taxonomy.
 
