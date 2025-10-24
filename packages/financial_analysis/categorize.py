@@ -332,6 +332,81 @@ def _group_by_normalized_merchant(
     return exemplars, by_key, singleton_indices
 
 
+def _fan_out_group_decisions(
+    original_seq: list[Mapping[str, Any]],
+    *,
+    exemplars: Sequence[int],
+    by_key: Mapping[str, list[int]],
+    singleton_indices: Sequence[int],
+    group_details_by_exemplar: Mapping[int, Mapping[str, Any]],
+) -> list[CategorizedTransaction]:
+    """Apply group-level categorization details to all group members.
+
+    Parameters
+    ----------
+    original_seq:
+        Full input sequence (preserves output order).
+    exemplars:
+        Absolute indices of representative items for each group (sorted).
+    by_key:
+        Mapping from grouping key to absolute indices for members of that group.
+    singleton_indices:
+        Absolute indices of items that did not belong to any group.
+    group_details_by_exemplar:
+        Parsed LLM result details keyed by exemplar absolute index.
+
+    Returns
+    -------
+    list[CategorizedTransaction]
+        One entry per input item in ``original_seq``, preserving order.
+    """
+
+    # Precompute mapping from exemplar -> member indices (including itself)
+    members_by_exemplar: dict[int, list[int]] = {ex: [] for ex in exemplars}
+    for idxs in by_key.values():
+        root = min(idxs)
+        members_by_exemplar[root].extend(idxs)
+    for i in singleton_indices:
+        members_by_exemplar[i].append(i)
+
+    # Start with Unknown placeholders to preserve order; fill per group below.
+    results: list[CategorizedTransaction] = [
+        CategorizedTransaction(transaction=tx, category="Unknown") for tx in original_seq
+    ]
+
+    for exemplar_abs_idx, members in members_by_exemplar.items():
+        details = group_details_by_exemplar.get(exemplar_abs_idx)
+        if details is None:  # pragma: no cover - defensive
+            # Should not happen; treat as Unknown and omit optional details.
+            cat_effective = "Unknown"
+            detail_kwargs: dict[str, Any] = {}
+        else:
+            cat = cast(str, details.get("category"))
+            revised_cat = details.get("revised_category")
+            cat_effective = cast(str, (revised_cat or cat))
+            # Preserve explicit empty citations as None vs omitted in details.
+            cits = details.get("citations")
+            citations_tuple: tuple[str, ...] | None
+            if isinstance(cits, list) and cits:
+                citations_tuple = tuple(cits)
+            else:
+                citations_tuple = None
+            detail_kwargs = {
+                "rationale": cast(str | None, details.get("rationale")),
+                "score": cast(float | None, details.get("score")),
+                "revised_category": cast(str | None, details.get("revised_category")),
+                "revised_rationale": cast(str | None, details.get("revised_rationale")),
+                "revised_score": cast(float | None, details.get("revised_score")),
+                "citations": citations_tuple,
+            }
+        for m in members:
+            results[m] = CategorizedTransaction(
+                transaction=original_seq[m], category=cat_effective, **detail_kwargs
+            )
+
+    return results
+
+
 def categorize_expenses(
     transactions: Transactions,
     taxonomy: Sequence[Mapping[str, Any]],
@@ -429,46 +504,13 @@ def categorize_expenses(
         )
         raise
 
-    # Fan out group-level decisions to all members
-    results: list[CategorizedTransaction] = []
-    # Precompute mapping from exemplar -> member indices (including itself)
-    members_by_exemplar: dict[int, list[int]] = {ex: [] for ex in exemplars}
-    for idxs in by_key.values():
-        root = min(idxs)
-        members_by_exemplar[root].extend(idxs)
-    for i in singleton_indices:
-        members_by_exemplar[i].append(i)
-
-    # Fill results with defaults to preserve order, then set via groups
-    results = [CategorizedTransaction(transaction=tx, category="Unknown") for tx in original_seq]
-
-    for exemplar_abs_idx, members in members_by_exemplar.items():
-        details = group_details_by_exemplar.get(exemplar_abs_idx)
-        if details is None:  # pragma: no cover - defensive
-            # Should not happen; treat as Unknown
-            cat_effective = "Unknown"
-            detail_kwargs: dict[str, Any] = {}
-        else:
-            cat = cast(str, details.get("category"))
-            revised_cat = details.get("revised_category")
-            cat_effective = cast(str, (revised_cat or cat))
-            cits = details.get("citations")
-            citations_tuple: tuple[str, ...] | None
-            if isinstance(cits, list) and cits:
-                citations_tuple = tuple(cits)
-            else:
-                citations_tuple = None
-            detail_kwargs = {
-                "rationale": cast(str | None, details.get("rationale")),
-                "score": cast(float | None, details.get("score")),
-                "revised_category": cast(str | None, details.get("revised_category")),
-                "revised_rationale": cast(str | None, details.get("revised_rationale")),
-                "revised_score": cast(float | None, details.get("revised_score")),
-                "citations": citations_tuple,
-            }
-        for m in members:
-            results[m] = CategorizedTransaction(
-                transaction=original_seq[m], category=cat_effective, **detail_kwargs
-            )
+    # Fan out group-level decisions to all members via helper
+    results: list[CategorizedTransaction] = _fan_out_group_decisions(
+        original_seq,
+        exemplars=exemplars,
+        by_key=by_key,
+        singleton_indices=singleton_indices,
+        group_details_by_exemplar=group_details_by_exemplar,
+    )
 
     return results
