@@ -115,106 +115,94 @@ def parse_and_align_category_details(
     allowed_categories: Sequence[str],
     fallback_to_other: bool = True,
 ) -> list[dict[str, Any]]:
-    """Parse Responses JSON into aligned per-item dicts with details.
+    """Lightweight parser that aligns detailed results by ``idx``.
 
-    Expected shape (strict):
-    - body.results: list of length ``num_items``.
-    - each item: { idx:int, id:str|null, category:str, rationale:str, score:number[0,1],
-      revised_category?:str, revised_rationale?:str, revised_score?:number[0,1], citations?:str[] }
-
-    Returns a list of length ``num_items`` ordered by page-relative ``idx``. All
-    string values are trimmed. ``category`` and ``revised_category`` are
-    validated against ``allowed_categories``; invalid values fall back to
-    ``Other``/``Unknown`` when ``fallback_to_other`` is True, else a
-    ``ValueError`` is raised.
+    This intentionally focuses on the happy path: a top-level mapping with a
+    ``results`` list of length ``num_items`` where each element contains
+    ``idx``, ``category``, and optional detail fields. We rely on the strict
+    JSON schema given to the model to keep shapes sane and avoid guarding every
+    edge case here. Categories not in ``allowed_categories`` are replaced with
+    ``Other`` (or ``Unknown``) when ``fallback_to_other`` is True.
     """
 
     if not isinstance(body, Mapping):
         raise ValueError("Invalid response: expected a JSON object at top level")
 
     results = body.get("results")
-    if not isinstance(results, list):
-        raise ValueError("Invalid response: missing or non-list 'results'")
-    if len(results) != num_items:
-        raise ValueError(f"Invalid response: expected {num_items} results, got {len(results)}")
+    if not isinstance(results, list) or len(results) != num_items:
+        raise ValueError(f"Invalid response: expected 'results' list of length {num_items}")
 
     allowed_set = set(allowed_categories)
     out: list[dict[str, Any] | None] = [None] * num_items
 
-    def _normalize_cat(raw: Any) -> str:
-        if not isinstance(raw, str):
-            raise ValueError("Invalid response: category must be string")
-        v = raw.strip()
-        if v in allowed_set:
-            return v
-        if not fallback_to_other:
-            raise ValueError(f"Invalid category value: {raw!r}")
-        if "Other" in allowed_set:
-            return "Other"
-        if "Unknown" in allowed_set:
-            return "Unknown"
-        raise ValueError(f"Invalid category and no fallback available: {raw!r}")
+    def _cat(v: Any) -> str:
+        # Always return a valid category from the allow-list or raise.
+        if not isinstance(v, str):
+            if fallback_to_other:
+                if "Other" in allowed_set:
+                    return "Other"
+                if "Unknown" in allowed_set:
+                    return "Unknown"
+            raise ValueError("Invalid response: category must be a string")
+        s = v.strip()
+        if s in allowed_set:
+            return s
+        if fallback_to_other:
+            if "Other" in allowed_set:
+                return "Other"
+            if "Unknown" in allowed_set:
+                return "Unknown"
+        raise ValueError(f"Invalid category value: {v!r} and no fallback available")
 
     for item in results:
         if not isinstance(item, Mapping):
             raise ValueError("Invalid response: each result must be an object")
         idx = item.get("idx")
-        if not isinstance(idx, int):
-            raise ValueError("Invalid response: 'idx' must be an integer")
-        if idx < 0 or idx >= num_items:
+        if not isinstance(idx, int) or not (0 <= idx < num_items):
             raise ValueError(f"Invalid response: 'idx' out of range: {idx}")
         if out[idx] is not None:
             raise ValueError(f"Invalid response: duplicate idx {idx}")
 
-        cat = _normalize_cat(item.get("category"))
-        # Required rationale and score
-        rationale = item.get("rationale")
-        if not isinstance(rationale, str) or not rationale.strip():
-            raise ValueError("Invalid response: 'rationale' must be a non-empty string")
-        score = item.get("score")
-        if not (isinstance(score, int | float) and 0 <= float(score) <= 1):
-            raise ValueError("Invalid response: 'score' must be a number in [0,1]")
+        cat = _cat(item.get("category"))
+        revised_cat_raw = item.get("revised_category")
+        revised_cat = _cat(revised_cat_raw) if isinstance(revised_cat_raw, str) else None
 
-        # Optional revised_* and citations
-        revised_category_raw = item.get("revised_category")
-        revised_category: str | None
-        if revised_category_raw is None:
-            revised_category = None
-        else:
-            revised_category = _normalize_cat(revised_category_raw)
-        revised_rationale_raw = item.get("revised_rationale")
-        revised_rationale = (
-            str(revised_rationale_raw).strip() if isinstance(revised_rationale_raw, str) else None
-        )
-        revised_score_raw = item.get("revised_score")
-        revised_score: float | None
-        if revised_score_raw is None:
-            revised_score = None
-        else:
-            if not (
-                isinstance(revised_score_raw, int | float) and 0 <= float(revised_score_raw) <= 1
-            ):
-                raise ValueError("Invalid response: 'revised_score' must be a number in [0,1]")
-            revised_score = float(revised_score_raw)
+        # Trim simple string fields; tolerate absence
+        def _t(s: Any) -> str | None:
+            return s.strip() if isinstance(s, str) and s.strip() else None
 
-        citations_raw = item.get("citations")
+        citations_val = item.get("citations")
         citations: list[str] | None = None
-        if citations_raw is not None:
-            if not isinstance(citations_raw, list) or not all(
-                isinstance(x, str) and x.strip() for x in citations_raw
-            ):
-                raise ValueError("Invalid response: 'citations' must be an array of strings")
-            citations = [str(x).strip() for x in citations_raw]
+        if isinstance(citations_val, list):
+            citations = [c.strip() for c in citations_val if isinstance(c, str) and c.strip()]
+            if not citations:
+                citations = None
+
+        # Coerce numeric scores when present; keep them within [0,1]
+        def _num01(x: Any, field: str) -> float | None:
+            if isinstance(x, int | float):
+                xf = float(x)
+                if 0.0 <= xf <= 1.0:
+                    return xf
+                raise ValueError(f"Invalid response: '{field}' must be a number in [0,1]")
+            return None
+
+        score_num = _num01(item.get("score"), "score")
+        revised_score_num = _num01(item.get("revised_score"), "revised_score")
+
+        # Normalize id to a string or None
+        _id = item.get("id")
+        id_out = _t(_id) if isinstance(_id, str) else None
 
         out[idx] = {
             "idx": idx,
-            "id": item.get("id"),
+            "id": id_out,
             "category": cat,
-            "rationale": rationale.strip(),
-            "score": float(score),
-            "revised_category": revised_category,
-            "revised_rationale": revised_rationale,
-            "revised_score": revised_score,
+            "rationale": _t(item.get("rationale")),
+            "score": score_num,
+            "revised_category": revised_cat,
+            "revised_rationale": _t(item.get("revised_rationale")),
+            "revised_score": revised_score_num,
             "citations": citations,
         }
 
