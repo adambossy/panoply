@@ -283,6 +283,55 @@ def _categorize_page(
 # ---- Public API --------------------------------------------------------------
 
 
+# ---- Grouping helpers --------------------------------------------------------
+
+
+def _normalize_merchant_key(tx: Mapping[str, Any]) -> str | None:
+    """Return a normalized grouping key from ``merchant`` or ``description``.
+
+    - Normalizes to NFKC, collapses internal whitespace, strips, and casefolds.
+    - Returns ``None`` when no usable value is present (treated as singleton).
+    """
+
+    raw = tx.get("merchant") or tx.get("description")
+    if raw is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(raw)).strip()
+    if not s:
+        return None
+    return " ".join(s.split()).casefold()
+
+
+def _group_by_normalized_merchant(
+    original_seq: list[Mapping[str, Any]],
+) -> tuple[list[int], dict[str, list[int]], list[int]]:
+    """Group transactions by normalized merchant/description and pick exemplars.
+
+    Returns a tuple ``(exemplars, by_key, singleton_indices)`` where:
+    - ``exemplars`` is a sorted list of absolute indices (smallest index per group
+      plus singletons).
+    - ``by_key`` maps a normalized key to the absolute indices in that group.
+    - ``singleton_indices`` are items with no usable key (treated as their own group).
+    """
+
+    by_key: dict[str, list[int]] = {}
+    singleton_indices: list[int] = []
+    for i, tx in enumerate(original_seq):
+        k = _normalize_merchant_key(tx)
+        if k is None:
+            singleton_indices.append(i)
+        else:
+            by_key.setdefault(k, []).append(i)
+
+    exemplars: list[int] = []
+    for idxs in by_key.values():
+        exemplars.append(min(idxs))
+    exemplars.extend(singleton_indices)  # singletons act as their own group
+    exemplars.sort()
+
+    return exemplars, by_key, singleton_indices
+
+
 def categorize_expenses(
     transactions: Transactions,
     taxonomy: Sequence[Mapping[str, Any]],
@@ -326,30 +375,8 @@ def categorize_expenses(
     if not isinstance(page_size, int) or page_size <= 0:
         raise ValueError("page_size must be a positive integer")
 
-    # Group before LLM: normalize merchant/description; pick one exemplar per group
-    def _norm_merchant_key(tx: Mapping[str, Any]) -> str | None:
-        raw = tx.get("merchant") or tx.get("description")
-        if raw is None:
-            return None
-        s = unicodedata.normalize("NFKC", str(raw)).strip()
-        if not s:
-            return None
-        return " ".join(s.split()).casefold()
-
-    by_key: dict[str, list[int]] = {}
-    singleton_indices: list[int] = []
-    for i, tx in enumerate(original_seq):
-        k = _norm_merchant_key(tx)
-        if k is None:
-            singleton_indices.append(i)
-        else:
-            by_key.setdefault(k, []).append(i)
-    # Deterministic exemplar per group: the smallest absolute index
-    exemplars: list[int] = []
-    for idxs in by_key.values():
-        exemplars.append(min(idxs))
-    exemplars.extend(singleton_indices)  # singletons act as their own group
-    exemplars.sort()
+    # Group before LLM
+    exemplars, by_key, singleton_indices = _group_by_normalized_merchant(original_seq)
 
     n_groups = len(exemplars)
 
