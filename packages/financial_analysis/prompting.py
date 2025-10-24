@@ -131,7 +131,7 @@ def build_user_content(
         "(3) a confidence score from 0.0 to 1.0. "
         "If an exact merchant identity can be verified, produce a higher score; "
         "if not, produce a lower score.\n\n"
-        "If your initial confidence is less than 0.9, use your built-in 'web_search' tool "
+        "If your initial confidence is less than 0.7, use your built-in 'web_search' tool "
         "to query the web for clues. Use the 'description' as the core of the search query, "
         "biasing toward unique tokens over generic provider tokens. "
         "When you use web search, include 'revised_category', 'revised_score', and "
