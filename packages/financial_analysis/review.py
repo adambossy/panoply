@@ -486,6 +486,21 @@ def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> li
     ]
 
 
+def _format_score_shorthand(item: CategorizedTransaction) -> str:
+    """Return a compact string for confidence scores, suitable for inline display.
+
+    Examples: " [0.82]", " [0.76 r0.91]", " [r0.88]". Empty string when no scores.
+    """
+    score = item.score
+    revised = item.revised_score
+    parts: list[str] = []
+    if isinstance(score, int | float) and score is not None:
+        parts.append(f"{float(score):.2f}")
+    if isinstance(revised, int | float) and revised is not None:
+        parts.append(f"r{float(revised):.2f}")
+    return f" [{' '.join(parts)}]" if parts else ""
+
+
 # ----------------------------------------------------------------------------
 # Category proposal and selection
 # ----------------------------------------------------------------------------
@@ -919,7 +934,10 @@ def review_transaction_categories(
             chosen_default = _select_default_category(
                 db_unanimous=db_default, group_items=group_items
             )
-            print_fn(f"Proposed category: {chosen_default}")
+            # Include shorthand confidence scores when available from the representative item.
+            rep_item = final[group_items[0].pos]
+            suffix = _format_score_shorthand(rep_item)
+            print_fn(f"Proposed category: {chosen_default}{suffix}")
 
             final_cat, category_changed = _select_category_for_group(
                 session=session,
