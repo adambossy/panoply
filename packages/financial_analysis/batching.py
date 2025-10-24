@@ -207,7 +207,9 @@ def _read_chunk_from_cache(
                     "revised_category": details.get("revised_category"),
                     "revised_rationale": details.get("revised_rationale"),
                     "revised_score": details.get("revised_score"),
-                    "citations": tuple(citations) if isinstance(citations, list) else None,
+                    "citations": (
+                        tuple(citations) if isinstance(citations, list) and citations else None
+                    ),
                 }
             out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs))
         return out
@@ -234,6 +236,7 @@ def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction])
             "category": item.category,
         }
         # Persist inlined detail fields under a nested 'llm' object for cache stability.
+        # Only write `llm` if any real detail exists (non-empty citations or any non-None scalar)
         has_any_details = any(
             getattr(item, name, None) is not None
             for name in (
@@ -242,9 +245,8 @@ def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction])
                 "revised_category",
                 "revised_rationale",
                 "revised_score",
-                "citations",
             )
-        )
+        ) or bool(getattr(item, "citations", None))
         if has_any_details:
             entry_llm: dict[str, Any] = {
                 "rationale": item.rationale,

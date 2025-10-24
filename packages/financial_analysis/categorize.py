@@ -427,7 +427,7 @@ def categorize_expenses(
             cat_effective = cast(str, (revised_cat or cat))
             cits = details.get("citations")
             citations_tuple: tuple[str, ...] | None
-            if isinstance(cits, list):
+            if isinstance(cits, list) and cits:
                 citations_tuple = tuple(cits)
             else:
                 citations_tuple = None
