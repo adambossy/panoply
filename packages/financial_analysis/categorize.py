@@ -129,23 +129,24 @@ def _paginate(n_total: int, page_size: int) -> Iterable[tuple[int, int, int]]:
 
 def _build_page_payload(
     original_seq: list[Mapping[str, Any]],
-    base: int,
-    end: int,
+    exemplar_abs_indices: list[int],
     *,
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, str]:
-    """Return ``(count, user_content)`` for a page slice ``[base, end)``.
+    """Return ``(count, user_content)`` for the given exemplar indices.
 
     Notes:
-    - Page-relative indices are emitted as ``idx`` starting at 0 and are used
-
-      later to align results back to absolute positions.
+    - The page consists only of exemplar transactions selected from the
+      original sequence by absolute index. Items are reindexed to
+      page-relative ``idx`` values (0..count-1) for alignment with model
+      output.
     - The caller does not need the full CTV list; only the count is used for
       alignment checks and logging.
     """
 
     ctv_page: list[dict[str, Any]] = []
-    for page_idx, record in enumerate(original_seq[base:end]):
+    for page_idx, abs_i in enumerate(exemplar_abs_indices):
+        record = original_seq[abs_i]
         ctv_page.append(
             {
                 "idx": page_idx,  # page-relative index (0..count-1)
@@ -207,23 +208,7 @@ def _categorize_page(
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> PageResult:
     # Build the page payload from exemplars only; keep page-relative idx
-    ctv_page: list[dict[str, Any]] = []
-    for page_idx, abs_i in enumerate(exemplar_abs_indices):
-        record = original_seq[abs_i]
-        ctv_page.append(
-            {
-                "idx": page_idx,  # page-relative index
-                "id": record.get("id"),
-                "description": record.get("description"),
-                "amount": record.get("amount"),
-                "date": record.get("date"),
-                "merchant": record.get("merchant"),
-                "memo": record.get("memo"),
-            }
-        )
-    ctv_json = prompting.serialize_ctv_to_json(ctv_page)
-    user_content = prompting.build_user_content(ctv_json, taxonomy=taxonomy)
-    count = len(ctv_page)
+    count, user_content = _build_page_payload(original_seq, exemplar_abs_indices, taxonomy=taxonomy)
 
     # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
     allowed: tuple[str, ...] = tuple(
