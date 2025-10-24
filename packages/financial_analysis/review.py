@@ -864,10 +864,12 @@ def review_transaction_categories(
                 return None
             # Use first representative; categorize phase assigns one decision per group.
             item = final[prepared[idxs[0]].pos]
-            llm = getattr(item, "llm", None)
-            if llm is None:
-                return None
-            return llm.revised_score if llm.revised_score is not None else llm.score
+            # Prefer revised_score when present; else score; missing -> None.
+            return (
+                item.revised_score
+                if getattr(item, "revised_score", None) is not None
+                else getattr(item, "score", None)
+            )
 
         MIN_CONFIDENCE = 0.7
         group_roots = [

@@ -32,35 +32,26 @@ Notes
 
 
 @dataclass(frozen=True, slots=True)
-class LLMCategoryDetails:
-    """Optional model-provided details for a categorization decision.
+class CategorizedTransaction:
+    """A transaction paired with an assigned (effective) category.
 
-    Fields mirror the strict JSON schema returned by the LLM when classifying
-    transactions and are intentionally optional so callers can omit them when
-    unavailable (e.g., legacy caches or tests that only assert on ``category``).
+    ``category`` reflects the effective choice used by the application. When
+    the model provides a post-search revision, ``revised_category`` is treated
+    as authoritative and copied here for downstream flows. For observability,
+    optional model-provided details (rationale/score and any post-search
+    ``revised_*`` fields, plus ``citations``) are carried directly on this
+    model for each item.
     """
 
+    transaction: TransactionRecord
+    category: str
+    # Optional details provided by the model for this decision.
     rationale: str | None = None
     score: float | None = None
     revised_category: str | None = None
     revised_rationale: str | None = None
     revised_score: float | None = None
     citations: tuple[str, ...] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CategorizedTransaction:
-    """A transaction paired with an assigned (effective) category.
-
-    ``category`` reflects the effective choice used by the application. When
-    the model provides a post-search revision, ``revised_category`` is treated
-    as authoritative and copied here for downstream flows, while the original
-    values remain available under ``llm``.
-    """
-
-    transaction: TransactionRecord
-    category: str
-    llm: LLMCategoryDetails | None = None
 
 
 class RefundMatch(NamedTuple):

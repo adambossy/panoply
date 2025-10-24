@@ -196,22 +196,20 @@ def _read_chunk_from_cache(
         out: list[CategorizedTransaction] = []
         for i, ent in enumerate(items):
             tx = ctv_items[meta.base + i]
-            llm = None
-            # Optional llm details
+            # Optional llm details (nested in cache); map to inlined fields
             details = ent.get("llm")
+            kwargs: dict[str, Any] = {}
             if isinstance(details, dict):
-                from .models import LLMCategoryDetails
-
                 citations = details.get("citations")
-                llm = LLMCategoryDetails(
-                    rationale=details.get("rationale"),
-                    score=details.get("score"),
-                    revised_category=details.get("revised_category"),
-                    revised_rationale=details.get("revised_rationale"),
-                    revised_score=details.get("revised_score"),
-                    citations=tuple(citations) if isinstance(citations, list) else None,
-                )
-            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], llm=llm))
+                kwargs = {
+                    "rationale": details.get("rationale"),
+                    "score": details.get("score"),
+                    "revised_category": details.get("revised_category"),
+                    "revised_rationale": details.get("revised_rationale"),
+                    "revised_score": details.get("revised_score"),
+                    "citations": tuple(citations) if isinstance(citations, list) else None,
+                }
+            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs))
         return out
     except Exception:
         return None
@@ -235,16 +233,28 @@ def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction])
             "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
             "category": item.category,
         }
-        llm = getattr(item, "llm", None)
-        if llm is not None:
-            entry["llm"] = {
-                "rationale": llm.rationale,
-                "score": llm.score,
-                "revised_category": llm.revised_category,
-                "revised_rationale": llm.revised_rationale,
-                "revised_score": llm.revised_score,
-                "citations": list(llm.citations) if llm.citations else None,
+        # Persist inlined detail fields under a nested 'llm' object for cache stability.
+        has_any_details = any(
+            getattr(item, name, None) is not None
+            for name in (
+                "rationale",
+                "score",
+                "revised_category",
+                "revised_rationale",
+                "revised_score",
+                "citations",
+            )
+        )
+        if has_any_details:
+            entry_llm: dict[str, Any] = {
+                "rationale": item.rationale,
+                "score": item.score,
+                "revised_category": item.revised_category,
+                "revised_rationale": item.revised_rationale,
+                "revised_score": item.revised_score,
             }
+            entry_llm["citations"] = list(item.citations) if item.citations else None
+            entry["llm"] = entry_llm
         items_out.append(entry)
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)

@@ -28,7 +28,7 @@ from .categorization import (
     parse_and_align_category_details,
 )
 from .logging_setup import get_logger
-from .models import CategorizedTransaction, LLMCategoryDetails, Transactions
+from .models import CategorizedTransaction, Transactions
 
 # ---- Tunables (private) ------------------------------------------------------
 
@@ -420,22 +420,28 @@ def categorize_expenses(
         if details is None:  # pragma: no cover - defensive
             # Should not happen; treat as Unknown
             cat_effective = "Unknown"
-            llm_details = None
+            detail_kwargs: dict[str, Any] = {}
         else:
             cat = cast(str, details.get("category"))
             revised_cat = details.get("revised_category")
             cat_effective = cast(str, (revised_cat or cat))
-            llm_details = LLMCategoryDetails(
-                rationale=cast(str | None, details.get("rationale")),
-                score=cast(float | None, details.get("score")),
-                revised_category=cast(str | None, details.get("revised_category")),
-                revised_rationale=cast(str | None, details.get("revised_rationale")),
-                revised_score=cast(float | None, details.get("revised_score")),
-                citations=tuple(details.get("citations") or []) or None,
-            )
+            cits = details.get("citations")
+            citations_tuple: tuple[str, ...] | None
+            if isinstance(cits, list):
+                citations_tuple = tuple(cits)
+            else:
+                citations_tuple = None
+            detail_kwargs = {
+                "rationale": cast(str | None, details.get("rationale")),
+                "score": cast(float | None, details.get("score")),
+                "revised_category": cast(str | None, details.get("revised_category")),
+                "revised_rationale": cast(str | None, details.get("revised_rationale")),
+                "revised_score": cast(float | None, details.get("revised_score")),
+                "citations": citations_tuple,
+            }
         for m in members:
             results[m] = CategorizedTransaction(
-                transaction=original_seq[m], category=cat_effective, llm=llm_details
+                transaction=original_seq[m], category=cat_effective, **detail_kwargs
             )
 
     return results
