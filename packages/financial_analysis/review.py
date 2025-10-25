@@ -729,6 +729,7 @@ def review_transaction_categories(
     source_account: str | None,
     database_url: str | None = None,
     exemplars: int = 5,
+    prefilled_groups: int = 0,
     input_fn: Callable[[str], str] = builtins.input,
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
@@ -779,6 +780,11 @@ def review_transaction_categories(
     allow_create:
         When ``True`` (default), enables the “Create new category” path inside
         the interactive selector. Can be disabled in read‑only sessions.
+
+    prefilled_groups:
+        Count of duplicate groups that were auto-applied upstream (e.g., by the
+        CLI) prior to invoking this review flow. Used only for the pre-review
+        summary line.
     """
 
     # Materialize and precompute identifiers
@@ -842,7 +848,7 @@ def review_transaction_categories(
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         print_fn(
             _format_pre_review_summary(
-                prefilled_groups=0, remaining_by_root=gated_rem_by_root
+                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
             )
         )
 

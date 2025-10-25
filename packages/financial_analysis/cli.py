@@ -469,8 +469,9 @@ def cmd_review_transaction_categories(
         print(f"Error: failed to group transactions: {e}", file=sys.stderr)
         return 1
 
-    # Track which positions were resolved from the DB
+    # Track which positions/groups were resolved from the DB
     prefilled_positions: set[int] = set()
+    prefilled_groups: int = 0
 
     try:
         with session_scope(database_url=database_url) as session:
@@ -522,6 +523,7 @@ def cmd_review_transaction_categories(
 
                 for i in positions:
                     prefilled_positions.add(i)
+                prefilled_groups += 1
 
     except Exception as e:
         print(f"Error: DB prefill failed: {e}", file=sys.stderr)
@@ -540,6 +542,7 @@ def cmd_review_transaction_categories(
                 source_provider=source_provider,
                 source_account=source_account,
                 database_url=database_url,
+                prefilled_groups=prefilled_groups,
                 allow_create=allow_create,
             )
         except Exception as e:
@@ -627,6 +630,7 @@ def cmd_review_transaction_categories(
             source_provider=source_provider,
             source_account=source_account,
             database_url=database_url,
+            prefilled_groups=prefilled_groups,
             allow_create=allow_create,
         )
     except Exception as e:
