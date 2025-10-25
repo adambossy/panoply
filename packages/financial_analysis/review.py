@@ -807,66 +807,10 @@ def review_transaction_categories(
         if not allowed:
             raise RuntimeError("No categories present in fa_categories; cannot proceed")
 
-        # Prefill: one-time application from DB duplicates before interactive review.
-        # For each normalized merchant/description key present in this session,
-        # look up duplicates in the DB and, when they unanimously agree on a
-        # single non-null category, apply that category to all matching
-        # in-session rows immediately. Persist and mark them as finalized so the
-        # main loop will skip them. Emit one concise line per key.
-        prefilled_assigned: set[int] = set()
-        prefilled_groups: int = 0
-        for _k, positions in by_key.items():
-            if not positions:
-                continue
-            group_items = [prepared[i] for i in positions]
-            group_eids = [p.external_id for p in group_items if p.external_id is not None]
-            group_fps = [p.fingerprint for p in group_items]
-
-            _exemplars = 1  # no display required; keep IO small
-            db_dupes, db_default = _query_group_duplicates(
-                session,
-                source_provider=source_provider,
-                source_account=source_account,
-                group_eids=group_eids,
-                group_fps=group_fps,
-                exemplars=_exemplars,
-            )
-            if not db_default:
-                continue
-
-            _persist_group(
-                session,
-                source_provider=source_provider,
-                source_account=source_account,
-                group_items=group_items,
-                final_cat=db_default,
-                category_source="rule",
-            )
-            session.commit()
-
-            for p in positions:
-                prefilled_assigned.add(p)
-                final[prepared[p].pos] = CategorizedTransaction(
-                    transaction=prepared[p].tx,
-                    category=db_default,
-                    rationale="rule: in-session duplicate default",
-                    score=1.0,
-                )
-
-            prefilled_groups += 1
-
-            merchant_display_raw = (
-                group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
-            )
-            merchant_display = str(merchant_display_raw).strip() or "unknown"
-            msg = (
-                f"Applied {db_default} to {len(positions)} in-session duplicates "
-                f"with merchant {merchant_display}."
-            )
-            print_fn(msg)
-
-        # Ensure the interactive loop skips prefilled positions
-        assigned |= prefilled_assigned
+        # Note: DB-first duplicate prefill now happens in the CLI prior to
+        # invoking this review flow. The interactive review operates on the
+        # unresolved subset only. We no longer auto-apply from DB here to avoid
+        # double application when the CLI has already persisted those rows.
 
         # Compute remaining counts once per group root and consider only groups
         # with remaining items.
@@ -898,7 +842,7 @@ def review_transaction_categories(
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         print_fn(
             _format_pre_review_summary(
-                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
+                prefilled_groups=0, remaining_by_root=gated_rem_by_root
             )
         )
 
