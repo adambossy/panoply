@@ -337,7 +337,6 @@ def cmd_review_transaction_categories(
     source_provider: str = "amex",
     source_account: str | None = None,
     allow_create: bool | None = None,
-    auto_confirm_dupes: bool = False,
 ) -> int:
     """Categorize a CSV, review groups interactively, and persist decisions.
 
@@ -527,7 +526,6 @@ def cmd_review_transaction_categories(
             source_account=source_account,
             database_url=database_url,
             allow_create=allow_create,
-            auto_confirm_dupes=auto_confirm_dupes,
         )
     except Exception as e:
         print(f"Error: review failed: {e}", file=sys.stderr)
@@ -707,13 +705,6 @@ def review_transaction_categories_cmd(
             "Override with env FA_ALLOW_CATEGORY_CREATE=0."
         ),
     ),
-    auto_confirm_dupes: bool = typer.Option(
-        False,
-        help=(
-            "Automatically confirm applying the chosen category to session duplicates "
-            "(based on normalized merchant/description)."
-        ),
-    ),
 ) -> int:
     load_dotenv()
     import os
@@ -735,7 +726,6 @@ def review_transaction_categories_cmd(
         source_provider=source_provider,
         source_account=source_account,
         allow_create=allow_create,
-        auto_confirm_dupes=auto_confirm_dupes,
     )
 
 

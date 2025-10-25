@@ -733,7 +733,6 @@ def review_transaction_categories(
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
     allow_create: bool | None = None,
-    auto_confirm_dupes: bool = False,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
