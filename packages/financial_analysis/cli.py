@@ -79,6 +79,98 @@ def _compute_one(
     return idx, items, time.perf_counter() - t0_local
 
 
+def _prefill_unanimous_groups_from_db(
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    database_url: str | None,
+    source_provider: str,
+    source_account: str | None,
+) -> tuple[set[int], int]:
+    """Auto-assign unanimous DB categories per group and persist them.
+
+    Groups transactions by normalized merchant, queries duplicates in the DB
+    within the given ``(source_provider, source_account)`` scope, and when all
+    non-null categories agree for a group, persists that category for all
+    positions in the group. Returns a tuple of ``(prefilled_positions,
+    prefilled_groups)``.
+
+    Raises a ``RuntimeError`` with context on grouping failures; DB and
+    persistence errors are propagated as-is to the caller.
+    """
+
+    # Local imports keep CLI startup fast and avoid module-level hard deps
+    from db.client import session_scope
+    from .categorize import _group_by_normalized_merchant
+    from .persistence import compute_fingerprint
+    from .review import (
+        _PreparedItem as _ReviewPreparedItem,
+        _query_group_duplicates as _review_query_group_duplicates,
+        _persist_group as _review_persist_group,
+    )
+
+    try:
+        _exemplars, by_key, _singletons = _group_by_normalized_merchant(ctv_items)
+    except Exception as e:  # pragma: no cover - defensive clarity
+        raise RuntimeError(f"failed to group transactions: {e}") from e
+
+    prefilled_positions: set[int] = set()
+    prefilled_groups = 0
+
+    with session_scope(database_url=database_url) as session:
+        for positions in by_key.values():
+            if not positions:
+                continue
+
+            # Build identifiers for DB lookup
+            group_eids: list[str] = []
+            group_fps: list[str] = []
+            group_items: list[_ReviewPreparedItem] = []
+            for i in positions:
+                tx = ctv_items[i]
+                tx_id_val = tx.get("id")
+                eid = str(tx_id_val).strip() if tx_id_val is not None else None
+                if eid:
+                    group_eids.append(eid)
+                fp = compute_fingerprint(source_provider=source_provider, tx=tx)
+                group_fps.append(fp)
+                group_items.append(
+                    _ReviewPreparedItem(
+                        pos=i,
+                        tx=tx,
+                        suggested="",  # not used in persistence path
+                        external_id=eid,
+                        fingerprint=fp,
+                    )
+                )
+
+            # Query duplicates once per group; when unanimous, auto-apply
+            _dupes, unanimous = _review_query_group_duplicates(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_eids=group_eids,
+                group_fps=group_fps,
+                exemplars=1,
+            )
+            if not unanimous:
+                continue
+
+            _review_persist_group(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_items=group_items,
+                final_cat=unanimous,
+                category_source="rule",
+            )
+            session.commit()
+
+            prefilled_positions.update(positions)
+            prefilled_groups += 1
+
+    return prefilled_positions, prefilled_groups
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``financial_analysis`` CLI (stub).
 
@@ -390,14 +482,6 @@ def cmd_review_transaction_categories(
     load_dotenv(override=False)
 
     from .api import review_transaction_categories
-    from .categorize import _group_by_normalized_merchant
-    from .persistence import compute_fingerprint
-    # Reuse review helpers to ensure identical semantics for duplicate matching
-    from .review import (
-        _PreparedItem as _ReviewPreparedItem,
-        _query_group_duplicates as _review_query_group_duplicates,
-        _persist_group as _review_persist_group,
-    )
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
@@ -450,81 +534,14 @@ def cmd_review_transaction_categories(
         print("No transactions to review.")
         return 0
 
-    # Load the canonical taxonomy from the DB (uses provided database_url)
+    # DB-first prefill: resolve groups that have a unanimous DB category
     try:
-        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
-    except Exception as e:
-        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
-        return 1
-
-    # DB-first prefill: group by normalized merchant, apply unanimous DB
-    # categories, and persist before any LLM calls. Only unresolved groups
-    # proceed to categorization.
-    from db.client import session_scope
-
-    # Reuse categorization grouping semantics for consistency.
-    try:
-        exemplars, by_key, singleton_indices = _group_by_normalized_merchant(ctv_items)
-    except Exception as e:
-        print(f"Error: failed to group transactions: {e}", file=sys.stderr)
-        return 1
-
-    # Track which positions/groups were resolved from the DB
-    prefilled_positions: set[int] = set()
-    prefilled_groups: int = 0
-
-    try:
-        with session_scope(database_url=database_url) as session:
-            for positions in by_key.values():
-                if not positions:
-                    continue
-                # Build identifiers for DB lookup
-                group_eids: list[str] = []
-                group_fps: list[str] = []
-                group_items: list[_ReviewPreparedItem] = []
-                for i in positions:
-                    tx = ctv_items[i]
-                    eid = str(tx.get("id")).strip() if tx.get("id") is not None else None
-                    if eid:
-                        group_eids.append(eid)
-                    fp = compute_fingerprint(source_provider=source_provider, tx=tx)
-                    group_fps.append(fp)
-                    group_items.append(
-                        _ReviewPreparedItem(
-                            pos=i,
-                            tx=tx,
-                            suggested="",  # not used in persistence path
-                            external_id=eid,
-                            fingerprint=fp,
-                        )
-                    )
-
-                # Query duplicates once per group; when unanimous, auto-apply
-                _dupes, unanimous = _review_query_group_duplicates(
-                    session,
-                    source_provider=source_provider,
-                    source_account=source_account,
-                    group_eids=group_eids,
-                    group_fps=group_fps,
-                    exemplars=1,
-                )
-                if not unanimous:
-                    continue
-
-                _review_persist_group(
-                    session,
-                    source_provider=source_provider,
-                    source_account=source_account,
-                    group_items=group_items,
-                    final_cat=unanimous,
-                    category_source="rule",
-                )
-                session.commit()
-
-                for i in positions:
-                    prefilled_positions.add(i)
-                prefilled_groups += 1
-
+        prefilled_positions, prefilled_groups = _prefill_unanimous_groups_from_db(
+            ctv_items,
+            database_url=database_url,
+            source_provider=source_provider,
+            source_account=source_account,
+        )
     except Exception as e:
         print(f"Error: DB prefill failed: {e}", file=sys.stderr)
         return 1
@@ -549,6 +566,13 @@ def cmd_review_transaction_categories(
             print(f"Error: review failed: {e}", file=sys.stderr)
             return 1
         return 0
+
+    # Load the canonical taxonomy from the DB (uses provided database_url)
+    try:
+        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
+    except Exception as e:
+        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
+        return 1
 
     # Categorize only unresolved items using the on-disk cache keyed to the
     # subset (excludes already-resolved groups from dataset_id per Issue #F).
