@@ -222,29 +222,15 @@ def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction])
         entry: dict[str, Any] = {
             "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
             "category": item.category,
-        }
-        # Persist inlined detail fields under a nested 'llm' object for cache stability.
-        # Only write `llm` if any real detail exists (non-empty citations or any non-None scalar)
-        has_any_details = any(
-            getattr(item, name, None) is not None
-            for name in (
-                "rationale",
-                "score",
-                "revised_category",
-                "revised_rationale",
-                "revised_score",
-            )
-        ) or bool(getattr(item, "citations", None))
-        if has_any_details:
-            entry_llm: dict[str, Any] = {
+            "llm": {
                 "rationale": item.rationale,
                 "score": item.score,
                 "revised_category": item.revised_category,
                 "revised_rationale": item.revised_rationale,
                 "revised_score": item.revised_score,
-            }
-            entry_llm["citations"] = list(item.citations) if item.citations else None
-            entry["llm"] = entry_llm
+                "citations": list(item.citations or []),
+            },
+        }
         items_out.append(entry)
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
