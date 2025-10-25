@@ -370,44 +370,20 @@ def _fan_out_group_decisions(
 
     for exemplar_abs_idx, members in members_by_exemplar.items():
         details = group_details_by_exemplar.get(exemplar_abs_idx)
-        if details is not None:
-            cat = cast(str, details.get("category"))
-            revised_cat = details.get("revised_category")
-            cat_effective = cast(str, (revised_cat or cat))
-            # Preserve explicit empty citations as None vs omitted in details.
-            cits = details.get("citations")
-            citations_tuple: tuple[str, ...] | None
-            if isinstance(cits, list) and cits:
-                citations_tuple = tuple(cits)
-            else:
-                citations_tuple = None
-            rationale_any = details.get("rationale")
-            score_any = details.get("score")
-            if not isinstance(rationale_any, str) or not rationale_any.strip():
-                raise RuntimeError(
-                    f"Missing or empty rationale for exemplar {exemplar_abs_idx}"
-                )
-            if not isinstance(score_any, int | float):
-                raise RuntimeError(f"Missing score for exemplar {exemplar_abs_idx}")
-            rationale_val = rationale_any.strip()
-            score_val = float(score_any)
-            revised_category_val = cast(str | None, details.get("revised_category"))
-            revised_rationale_val = cast(str | None, details.get("revised_rationale"))
-            revised_score_val = cast(float | None, details.get("revised_score"))
-        else:  # pragma: no cover - defensive: missing details for a group
+        if details is None:  # pragma: no cover - defensive: missing details for a group
             raise RuntimeError(
                 f"Internal error: missing parsed details for exemplar index {exemplar_abs_idx}"
             )
         for m in members:
             results[m] = CategorizedTransaction(
                 transaction=original_seq[m],
-                category=cat_effective,
-                rationale=rationale_val,
-                score=score_val,
-                revised_category=revised_category_val,
-                revised_rationale=revised_rationale_val,
-                revised_score=revised_score_val,
-                citations=citations_tuple,
+                category=details["category"],
+                rationale=details["rationale"],
+                score=details["score"],
+                revised_category=details["revised_category"],
+                revised_rationale=details["revised_rationale"],
+                revised_score=details["revised_score"],
+                citations=details["citations"],
             )
 
     # Validate all positions were filled exactly once
