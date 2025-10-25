@@ -280,12 +280,6 @@ def _categorize_page(
             attempt += 1
 
 
-# ---- Public API --------------------------------------------------------------
-
-
-# ---- Grouping helpers --------------------------------------------------------
-
-
 def _normalize_merchant_key(tx: Mapping[str, Any]) -> str | None:
     """Return a normalized grouping key from ``merchant`` or ``description``.
 
