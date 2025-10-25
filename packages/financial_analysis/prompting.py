@@ -47,22 +47,18 @@ def serialize_ctv_to_json(ctv_items: Sequence[dict[str, Any]]) -> str:
 
 
 def build_system_instructions() -> str:
-    """Return the system instructions for two‑level taxonomy classification.
+    """Return concise system instructions for two‑level taxonomy classification.
 
-    Behavior required by the product spec:
-    - Categories come from a two‑level taxonomy (parents → children).
-    - Always try to choose the most specific bottom‑level (child) category.
-    - If no child clearly fits, choose the best matching top‑level (parent) category.
-    - If neither level fits, fall back to "Other" or "Unknown" when allowed.
-    - Output must be a single category string from the allowed set; no extra text.
+    Keep the model focused on: exactly one category from the provided taxonomy,
+    prefer specific child over parent, never invent categories, and output JSON
+    only per the schema.
     """
 
     return (
-        "You are a precise expense categorization engine. Use the provided two-level "
-        "taxonomy to choose exactly one category per transaction. Prefer the most "
-        "specific bottom-level category; if none clearly applies, choose the best "
-        "top-level category; if still no fit, use 'Other' or 'Unknown' when allowed. "
-        "Never invent categories and do not include explanations."
+        "You are an agent that categorizes credit card transactions using the provided "
+        "two-level taxonomy. Choose exactly one category per transaction (prefer the most "
+        "specific child; otherwise the parent). Never invent categories. Output JSON only "
+        "that conforms to the specified schema."
     )
 
 
@@ -70,17 +66,15 @@ def build_user_content(
     ctv_json: str,
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> str:
-    """Build user content including an optional two‑level taxonomy section.
+    """Build user content centered around the refined instructions in Issue #88.
 
-    Parameters
-    ----------
-    ctv_json:
-        JSON array of page CTV items (with page‑relative ``idx`` fields).
-    taxonomy:
-        Sequence of mappings having at least ``code`` and
-        ``parent_code`` keys. When provided, a concise hierarchy section is
-        included so the model can prefer children and fall back to parents
-        when needed.
+    - Embeds a concise, deterministic view of the two‑level taxonomy so the
+      model can prefer children and fall back to parents.
+    - Embeds the Transactions JSON delimited by BEGIN_/END_ markers with
+      page‑relative ``idx`` for alignment.
+    - Calls out the required response fields: ``category``, ``rationale``,
+      ``score`` and the conditional ``revised_*`` plus ``citations`` when web
+      search is used.
     """
     hierarchy_text = ""
 
@@ -127,16 +121,32 @@ def build_user_content(
 
     header_target = "taxonomy below"
 
+    refined_text = (
+        "You are an agent that categorizes credit card transactions.\n\n"
+        "You will receive a list of credit card transactions formatted as JSON. "
+        "For each transaction, generate a JSON object containing: "
+        "(1) a category chosen from the provided taxonomy based on the transaction's "
+        "'description' (and 'merchant' when present), "
+        "(2) a rationale for why you chose that category, and "
+        "(3) a confidence score from 0.0 to 1.0. "
+        "If an exact merchant identity can be verified, produce a higher score; "
+        "if not, produce a lower score.\n\n"
+        "If your initial confidence is less than 0.7, use your built-in 'web_search' tool "
+        "to query the web for clues. Use the 'description' as the core of the search query, "
+        "biasing toward unique tokens over generic provider tokens. "
+        "When you use web search, include 'revised_category', 'revised_score', and "
+        "'revised_rationale' fields that reflect your reassessment based on the search results, "
+        "plus a 'citations' array listing all web pages you used.\n\n"
+        "Keep the input order and align each result by the provided page-relative 'idx'. "
+        "Choose exactly one category per transaction. Never invent categories; "
+        "use only those from the taxonomy. "
+        "Respond with JSON only that conforms to the provided schema."
+    )
+
     return (
-        f"Task: Categorize each transaction into exactly one category from the {header_target}.\n\n"
+        f"{refined_text}\n\n"
+        f"Context: The {header_target}.\n"
         f"{hierarchy_text}"
-        "Rules:\n"
-        "- Choose only one category for each transaction.\n"
-        "- Prefer the most specific child; if no child fits, pick the best parent.\n"
-        "- If neither level fits, use 'Other' or 'Unknown' only if present in the taxonomy.\n"
-        "- Keep input order. Use the provided idx field to align responses.\n"
-        "- Respond with JSON only, following the specified schema. No extra text.\n\n"
-        "- Categorize every transaction in your output. DON'T DROP ANY TRANSACTIONS.\n"
         "Transactions JSON (UTF-8). Begin after the next line with "
         "BEGIN_TRANSACTIONS_JSON and end at END_TRANSACTIONS_JSON:\n"
         "BEGIN_TRANSACTIONS_JSON\n"
@@ -201,8 +211,30 @@ def build_response_format(
                             "idx": {"type": "integer"},
                             "id": {"type": ["string", "null"]},
                             "category": {"type": "string", "enum": codes},
+                            "rationale": {"type": "string"},
+                            "score": {"type": "number", "minimum": 0, "maximum": 1},
+                            "revised_category": {
+                                "type": ["string", "null"],
+                                "enum": codes + [None],
+                            },
+                            "revised_rationale": {"type": ["string", "null"]},
+                            "revised_score": {"type": ["number", "null"]},
+                            "citations": {
+                                "type": ["array", "null"],
+                                "items": {"type": "string"},
+                            },
                         },
-                        "required": ["idx", "id", "category"],
+                        "required": [
+                            "idx",
+                            "id",
+                            "category",
+                            "rationale",
+                            "score",
+                            "revised_category",
+                            "revised_rationale",
+                            "revised_score",
+                            "citations",
+                        ],
                         "additionalProperties": False,
                     },
                 }

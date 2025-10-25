@@ -14,6 +14,7 @@ import json
 import math
 import random
 import time
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NamedTuple, cast
 
@@ -22,13 +23,16 @@ from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
 from . import prompting
-from .categorization import ensure_valid_ctv_descriptions, parse_and_align_categories
+from .categorization import (
+    ensure_valid_ctv_descriptions,
+    parse_and_align_category_details,
+)
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
 
 # ---- Tunables (private) ------------------------------------------------------
 
-_PAGE_SIZE_DEFAULT: int = 100
+_PAGE_SIZE_DEFAULT: int = 10
 _CONCURRENCY: int = 4
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
@@ -125,23 +129,24 @@ def _paginate(n_total: int, page_size: int) -> Iterable[tuple[int, int, int]]:
 
 def _build_page_payload(
     original_seq: list[Mapping[str, Any]],
-    base: int,
-    end: int,
+    exemplar_abs_indices: list[int],
     *,
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> tuple[int, str]:
-    """Return ``(count, user_content)`` for a page slice ``[base, end)``.
+    """Return ``(count, user_content)`` for the given exemplar indices.
 
     Notes:
-    - Page-relative indices are emitted as ``idx`` starting at 0 and are used
-
-      later to align results back to absolute positions.
+    - The page consists only of exemplar transactions selected from the
+      original sequence by absolute index. Items are reindexed to
+      page-relative ``idx`` values (0..count-1) for alignment with model
+      output.
     - The caller does not need the full CTV list; only the count is used for
       alignment checks and logging.
     """
 
     ctv_page: list[dict[str, Any]] = []
-    for page_idx, record in enumerate(original_seq[base:end]):
+    for page_idx, abs_i in enumerate(exemplar_abs_indices):
+        record = original_seq[abs_i]
         ctv_page.append(
             {
                 "idx": page_idx,  # page-relative index (0..count-1)
@@ -189,26 +194,21 @@ def _sleep_backoff(attempt_no: int) -> None:
 
 class PageResult(NamedTuple):
     page_index: int
-    base: int
-    categories: list[str]
+    # List of (group_root_abs_index, parsed_result_dict)
+    results: list[tuple[int, dict[str, Any]]]
 
 
 def _categorize_page(
     page_index: int,
     *,
-    base: int,
-    end: int,
+    exemplar_abs_indices: list[int],  # absolute indices into original_seq
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     taxonomy: Sequence[Mapping[str, Any]],
 ) -> PageResult:
-    count, user_content = _build_page_payload(
-        original_seq,
-        base,
-        end,
-        taxonomy=taxonomy,
-    )
+    # Build the page payload from exemplars only; keep page-relative idx
+    count, user_content = _build_page_payload(original_seq, exemplar_abs_indices, taxonomy=taxonomy)
 
     # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
     allowed: tuple[str, ...] = tuple(
@@ -232,23 +232,29 @@ def _categorize_page(
                 instructions=system_instructions,
                 input=user_content,
                 text=text_cfg,
+                tools=[{"type": "web_search"}],
+                tool_choice="auto",
             )
             decoded = _extract_response_json_mapping(resp)
-            page_categories = parse_and_align_categories(
+            detailed = parse_and_align_category_details(
                 decoded, num_items=count, allowed_categories=allowed
             )
-            return PageResult(page_index=page_index, base=base, categories=page_categories)
+            # Map page-relative results back to absolute exemplar indices
+            out: list[tuple[int, dict[str, Any]]] = []
+            for page_idx, item in enumerate(detailed):
+                abs_index = exemplar_abs_indices[page_idx]
+                out.append((abs_index, item))
+            return PageResult(page_index=page_index, results=out)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
             # Retry scope narrowed to 429/5xx only.
             if attempt >= _MAX_ATTEMPTS or not _is_retryable(e):
                 _logger.error(
                     (
-                        "categorize_expenses:page_failed_terminal page_index=%d base=%d "
-                        "count=%d latency_ms=%.2f error=%s"
+                        "categorize_expenses:page_failed_terminal page_index=%d exemplars=%d "
+                        "latency_ms=%.2f error=%s"
                     ),
                     page_index,
-                    base,
                     count,
                     dt_ms,
                     e.__class__.__name__,
@@ -257,16 +263,14 @@ def _categorize_page(
                     # Parsing/validation failures are terminal (no retries)
                     raise e
                 raise RuntimeError(
-                    f"categorize_expenses failed for page {page_index} "
-                    f"(base={base}, count={count}): {e}"
+                    f"categorize_expenses failed for page {page_index} (exemplars={count}): {e}"
                 ) from e
             _logger.warning(
                 (
-                    "categorize_expenses:page_retry page_index=%d base=%d count=%d "
+                    "categorize_expenses:page_retry page_index=%d count=%d "
                     "latency_ms=%.2f error=%s attempt=%d"
                 ),
                 page_index,
-                base,
                 count,
                 dt_ms,
                 e.__class__.__name__,
@@ -276,7 +280,118 @@ def _categorize_page(
             attempt += 1
 
 
-# ---- Public API --------------------------------------------------------------
+def _normalize_merchant_key(tx: Mapping[str, Any]) -> str | None:
+    """Return a normalized grouping key from ``merchant`` or ``description``.
+
+    - Normalizes to NFKC, collapses internal whitespace, strips, and casefolds.
+    - Returns ``None`` when no usable value is present (treated as singleton).
+    """
+
+    raw = tx.get("merchant") or tx.get("description")
+    if raw is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(raw)).strip()
+    if not s:
+        return None
+    return " ".join(s.split()).casefold()
+
+
+def _group_by_normalized_merchant(
+    original_seq: list[Mapping[str, Any]],
+) -> tuple[list[int], dict[str, list[int]], list[int]]:
+    """Group transactions by normalized merchant/description and pick exemplars.
+
+    Returns a tuple ``(exemplars, by_key, singleton_indices)`` where:
+    - ``exemplars`` is a sorted list of absolute indices (smallest index per group
+      plus singletons).
+    - ``by_key`` maps a normalized key to the absolute indices in that group.
+    - ``singleton_indices`` are items with no usable key (treated as their own group).
+    """
+
+    by_key: dict[str, list[int]] = {}
+    singleton_indices: list[int] = []
+    for i, tx in enumerate(original_seq):
+        k = _normalize_merchant_key(tx)
+        if k is None:
+            singleton_indices.append(i)
+        else:
+            by_key.setdefault(k, []).append(i)
+
+    exemplars: list[int] = []
+    for idxs in by_key.values():
+        exemplars.append(min(idxs))
+    exemplars.extend(singleton_indices)  # singletons act as their own group
+    exemplars.sort()
+
+    return exemplars, by_key, singleton_indices
+
+
+def _fan_out_group_decisions(
+    original_seq: list[Mapping[str, Any]],
+    *,
+    exemplars: Sequence[int],
+    by_key: Mapping[str, list[int]],
+    singleton_indices: Sequence[int],
+    group_details_by_exemplar: Mapping[int, Mapping[str, Any]],
+) -> list[CategorizedTransaction]:
+    """Apply group-level categorization details to all group members.
+
+    Parameters
+    ----------
+    original_seq:
+        Full input sequence (preserves output order).
+    exemplars:
+        Absolute indices of representative items for each group (sorted).
+    by_key:
+        Mapping from grouping key to absolute indices for members of that group.
+    singleton_indices:
+        Absolute indices of items that did not belong to any group.
+    group_details_by_exemplar:
+        Parsed LLM result details keyed by exemplar absolute index.
+
+    Returns
+    -------
+    list[CategorizedTransaction]
+        One entry per input item in ``original_seq``, preserving order.
+    """
+
+    # Precompute mapping from exemplar -> member indices (including itself)
+    members_by_exemplar: dict[int, list[int]] = {ex: [] for ex in exemplars}
+    for idxs in by_key.values():
+        root = min(idxs)
+        members_by_exemplar[root].extend(idxs)
+    for i in singleton_indices:
+        members_by_exemplar[i].append(i)
+
+    # Prepare an output list and fill per group below. We avoid constructing
+    # placeholders because `CategorizedTransaction` now requires `rationale`
+    # and `score`.
+    results: list[CategorizedTransaction | None] = [None] * len(original_seq)
+
+    for exemplar_abs_idx, members in members_by_exemplar.items():
+        details = group_details_by_exemplar.get(exemplar_abs_idx)
+        if details is None:  # pragma: no cover - defensive: missing details for a group
+            raise RuntimeError(
+                f"Internal error: missing parsed details for exemplar index {exemplar_abs_idx}"
+            )
+        for m in members:
+            results[m] = CategorizedTransaction(
+                transaction=original_seq[m],
+                category=details["category"],
+                rationale=details["rationale"],
+                score=details["score"],
+                revised_category=details["revised_category"],
+                revised_rationale=details["revised_rationale"],
+                revised_score=details["revised_score"],
+                citations=details["citations"],
+            )
+
+    # Validate all positions were filled exactly once
+    missing = [i for i, v in enumerate(results) if v is None]
+    if missing:  # pragma: no cover - defensive
+        raise RuntimeError(f"Internal error: missing categorized results at indices {missing}")
+    # Cast away None for the type checker
+    return [cast(CategorizedTransaction, r) for r in results]
 
 
 def categorize_expenses(
@@ -322,7 +437,10 @@ def categorize_expenses(
     if not isinstance(page_size, int) or page_size <= 0:
         raise ValueError("page_size must be a positive integer")
 
-    # Determine pages lazily via _paginate(); no need to precompute total count.
+    # Group before LLM
+    exemplars, by_key, singleton_indices = _group_by_normalized_merchant(original_seq)
+
+    n_groups = len(exemplars)
 
     # Static per-call components reused across pages
     system_instructions = prompting.build_system_instructions()
@@ -333,51 +451,40 @@ def categorize_expenses(
         format=response_format,
     )
 
-    categories_by_abs_idx: list[str | None] = [None] * n_total
+    # Hold per-group parsed details keyed by exemplar absolute index
+    group_details_by_exemplar: dict[int, dict[str, Any]] = {}
 
-    try:
-        pages_iter = _paginate(n_total, page_size)
+    # Build pages over exemplars
+    pages: list[list[int]] = []
+    for _, base, end in _paginate(n_groups, page_size):
+        pages.append(exemplars[base:end])
 
-        def _map_page(t: tuple[int, int, int]) -> PageResult:
-            page_index, base, end = t
-            try:
-                return _categorize_page(
-                    page_index,
-                    base=base,
-                    end=end,
-                    original_seq=original_seq,
-                    system_instructions=system_instructions,
-                    text_cfg=text_cfg,
-                    taxonomy=taxonomy,
-                )
-            except Exception as e:  # noqa: BLE001
-                # Preserve ValueError semantics for validation/parse errors.
-                if isinstance(e, ValueError):
-                    raise
-                raise RuntimeError(
-                    f"categorize_expenses failed for page_index={page_index} base={base} end={end}"
-                ) from e
-
-        page_results: list[PageResult] = p_map(
-            pages_iter, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
+    def _map_page(page_index_and_indices: tuple[int, list[int]]) -> PageResult:
+        page_index, indices = page_index_and_indices
+        return _categorize_page(
+            page_index,
+            exemplar_abs_indices=indices,
+            original_seq=original_seq,
+            system_instructions=system_instructions,
+            text_cfg=text_cfg,
+            taxonomy=taxonomy,
         )
-        for page in page_results:
-            for i, cat in enumerate(page.categories):
-                categories_by_abs_idx[page.base + i] = cat
-    except Exception as e:
-        _logger.error(
-            "categorize_expenses:pmap_exception error=%s error_type=%s",
-            str(e),
-            e.__class__.__name__,
-        )
-        raise
 
-    missing = [i for i, v in enumerate(categories_by_abs_idx) if v is None]
-    if missing:  # pragma: no cover - defensive
-        raise RuntimeError(f"Internal error: missing categories at indices {missing}")
+    page_inputs: list[tuple[int, list[int]]] = [(i, pg) for i, pg in enumerate(pages)]
+    page_results: list[PageResult] = p_map(
+        page_inputs, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
+    )
+    for page in page_results:
+        for exemplar_abs_idx, item in page.results:
+            group_details_by_exemplar[exemplar_abs_idx] = item
 
-    results: list[CategorizedTransaction] = []
-    for i in range(n_total):
-        category: str = cast(str, categories_by_abs_idx[i])
-        results.append(CategorizedTransaction(transaction=original_seq[i], category=category))
+    # Fan out group-level decisions to all members via helper
+    results: list[CategorizedTransaction] = _fan_out_group_decisions(
+        original_seq,
+        exemplars=exemplars,
+        by_key=by_key,
+        singleton_indices=singleton_indices,
+        group_details_by_exemplar=group_details_by_exemplar,
+    )
+
     return results

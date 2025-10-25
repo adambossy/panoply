@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+
 # ---------------------------------------------------------------------------
 # Input validation (pre-request)
 # ---------------------------------------------------------------------------
@@ -106,3 +108,136 @@ def parse_and_align_categories(
         raise ValueError(f"Invalid response: missing indices {missing}")
 
     return [c for c in categories_by_idx if c is not None]
+
+
+class _DetailItem(BaseModel):
+    """Typed view of a single detailed categorization result.
+
+    The validators rely on ``ValidationInfo.context`` to receive:
+      - ``allowed_set``: set[str] of allowed categories
+      - ``fallback_to_other``: bool indicating whether to coerce out-of-taxonomy
+        values to ``Other``/``Unknown`` (when present in the allow-list)
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    idx: int
+    id: str | None = None
+    category: str
+    rationale: str
+    score: float
+    revised_category: str | None = None
+    revised_rationale: str | None = None
+    revised_score: float | None = None
+    citations: list[str] | None = None
+
+    @field_validator("category", "revised_category")
+    @classmethod
+    def _category_in_allowlist(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return None
+        allowed_set = info.context.get("allowed_set") if info.context else None
+        fallback_to_other = bool(info.context.get("fallback_to_other")) if info.context else True
+        s = v.strip()
+        if not allowed_set or s in allowed_set:
+            return s
+        if not fallback_to_other:
+            raise ValueError(f"category not in allow-list: {s!r}")
+        # Fallback stays within taxonomy when possible
+        if "Other" in allowed_set:
+            return "Other"
+        if "Unknown" in allowed_set:
+            return "Unknown"
+        raise ValueError(f"category not in allow-list and no fallback available: {s!r}")
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("rationale must be a non-empty string")
+        return v.strip()
+
+    @field_validator("score", "revised_score")
+    @classmethod
+    def _score_in_range(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if 0.0 <= float(v) <= 1.0:
+            return float(v)
+        raise ValueError("score must be in [0,1]")
+
+    @field_validator("id")
+    @classmethod
+    def _normalize_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+    @field_validator("citations")
+    @classmethod
+    def _normalize_citations(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        cleaned = [c.strip() for c in v if isinstance(c, str) and c.strip()]
+        return cleaned or None
+
+
+class _DetailBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[_DetailItem]
+
+
+def parse_and_align_category_details(
+    body: Mapping[str, Any],
+    *,
+    num_items: int,
+    allowed_categories: Sequence[str],
+    fallback_to_other: bool = True,
+) -> list[dict[str, Any]]:
+    """Parse Results with Pydantic and align by page-relative ``idx``.
+
+    This reduces manual ``isinstance`` checks by delegating field validation and
+    normalization to Pydantic models. It enforces required fields declared in
+    the response schema (``id``, ``category``, ``rationale``, ``score``) and
+    keeps numbers within [0,1]. Categories are validated against the provided
+    allow‑list with an optional in‑taxonomy fallback to ``Other``/``Unknown``.
+    """
+
+    if not isinstance(body, Mapping):
+        raise ValueError("Invalid response: expected a JSON object at top level")
+
+    allowed_set = set(allowed_categories)
+    parsed = _DetailBody.model_validate(
+        body,
+        context={"allowed_set": allowed_set, "fallback_to_other": fallback_to_other},
+    )
+    if len(parsed.results) != num_items:
+        raise ValueError(
+            f"Invalid response: expected {num_items} results, got {len(parsed.results)}"
+        )
+
+    out: list[dict[str, Any] | None] = [None] * num_items
+    for item in parsed.results:
+        idx = item.idx
+        if not (0 <= idx < num_items):
+            raise ValueError(f"Invalid response: 'idx' out of range: {idx}")
+        if out[idx] is not None:
+            raise ValueError(f"Invalid response: duplicate idx {idx}")
+        out[idx] = {
+            "idx": item.idx,
+            "id": item.id,
+            "category": item.category,
+            "rationale": item.rationale,
+            "score": item.score,
+            "revised_category": item.revised_category,
+            "revised_rationale": item.revised_rationale,
+            "revised_score": item.revised_score,
+            "citations": item.citations,
+        }
+
+    missing = [i for i, v in enumerate(out) if v is None]
+    if missing:
+        raise ValueError(f"Invalid response: missing indices {missing}")
+    return [d for d in out if d is not None]

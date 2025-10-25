@@ -9,7 +9,7 @@ Public helpers used by the CLI review flow:
 - ``spawn_background_chunk_worker``: sequentially pre-compute future chunks on
   a background thread while the operator reviews the current chunk.
 
-Cache layout (relative to the cache root, default: ``./.transactions``):
+Cache layout (relative to the cache root, default: ``./.cache``):
 
 ``<cache_root>/<dataset_id>/chunks/batch-00000.json``
 
@@ -46,6 +46,8 @@ from .categorize import _MODEL  # private, but stable within this package
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
 
+SCHEMA_VERSION: int = 2
+
 # ----------------------------------------------------------------------------
 # Cache roots and dataset identity
 # ----------------------------------------------------------------------------
@@ -54,7 +56,7 @@ from .persistence import compute_fingerprint
 def _get_cache_root() -> Path:
     """Return the cache root directory.
 
-    Default: ``./.transactions`` under the current working directory.
+    Default: ``./.cache`` under the current working directory.
     Override: ``FA_CACHE_DIR`` environment variable (absolute or relative).
     """
 
@@ -62,7 +64,7 @@ def _get_cache_root() -> Path:
     if root and root.strip():
         return Path(root).expanduser().resolve()
     # Use CWD by default, per #54 owner decision
-    return (Path.cwd() / ".transactions").resolve()
+    return (Path.cwd() / ".cache").resolve()
 
 
 def _settings_hash(
@@ -162,7 +164,7 @@ def _read_chunk_from_cache(
         raw = json.loads(path.read_text(encoding="utf-8"))
         if (
             not isinstance(raw, dict)
-            or raw.get("schema_version") != 1
+            or raw.get("schema_version") != SCHEMA_VERSION
             or raw.get("dataset_id") != meta.dataset_id
             or raw.get("chunk_index") != meta.chunk_idx
             or raw.get("base") != meta.base
@@ -180,6 +182,7 @@ def _read_chunk_from_cache(
                 return None
             fp = ent.get("fp")
             cat = ent.get("category")
+            # Minimal validation: fp and category required; llm details optional
             if not isinstance(fp, str) or not isinstance(cat, str):
                 return None
             tx = ctv_items[meta.base + i]
@@ -193,7 +196,10 @@ def _read_chunk_from_cache(
         out: list[CategorizedTransaction] = []
         for i, ent in enumerate(items):
             tx = ctv_items[meta.base + i]
-            out.append(CategorizedTransaction(transaction=tx, category=ent["category"]))
+            # Optional llm details (nested in cache); map to inlined fields
+            details = ent.get("llm", {})
+            details["citations"] = tuple(details.get("citations", []))
+            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **details))
         return out
     except Exception:
         return None
@@ -202,21 +208,30 @@ def _read_chunk_from_cache(
 def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction]) -> None:
     path = _chunk_path(meta.dataset_id, meta.chunk_idx)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    payload = {
-        "schema_version": 1,
+    items_out: list[dict[str, Any]] = []
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
         "dataset_id": meta.dataset_id,
         "chunk_index": meta.chunk_idx,
         "base": meta.base,
         "end": meta.end,
         "settings_hash": meta.settings_hash,
-        "items": [
-            {
-                "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
-                "category": item.category,
-            }
-            for item in items
-        ],
+        "items": items_out,
     }
+    for item in items:
+        entry: dict[str, Any] = {
+            "fp": compute_fingerprint(source_provider=meta.provider, tx=item.transaction),
+            "category": item.category,
+            "llm": {
+                "rationale": item.rationale,
+                "score": item.score,
+                "revised_category": item.revised_category,
+                "revised_rationale": item.revised_rationale,
+                "revised_score": item.revised_score,
+                "citations": list(item.citations or []),
+            },
+        }
+        items_out.append(entry)
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
@@ -266,7 +281,19 @@ def get_or_compute_chunk(
     for r in results:
         tx = dict(r.transaction)
         tx.setdefault("provider", source_provider)
-        to_cache.append(CategorizedTransaction(transaction=tx, category=r.category))
+        # Preserve LLM details in cache by forwarding inlined fields.
+        to_cache.append(
+            CategorizedTransaction(
+                transaction=tx,
+                category=r.category,
+                rationale=r.rationale,
+                score=r.score,
+                revised_category=r.revised_category,
+                revised_rationale=r.revised_rationale,
+                revised_score=r.revised_score,
+                citations=r.citations,
+            )
+        )
 
     _write_chunk_to_cache(meta, to_cache)
     # Return results with the original tx objects (without provider field addition)

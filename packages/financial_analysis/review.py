@@ -486,6 +486,21 @@ def _format_dup_rows(db_dupes: list[tuple[str | None, Mapping[str, Any]]]) -> li
     ]
 
 
+def _format_score_shorthand(item: CategorizedTransaction) -> str:
+    """Return a compact string for confidence scores, suitable for inline display.
+
+    Examples: " [0.82]", " [0.76 r0.91]", " [r0.88]". Empty string when no scores.
+    """
+    score = item.score
+    revised = item.revised_score
+    parts: list[str] = []
+    if isinstance(score, int | float) and score is not None:
+        parts.append(f"{float(score):.2f}")
+    if isinstance(revised, int | float) and revised is not None:
+        parts.append(f"r{float(revised):.2f}")
+    return f" [{' '.join(parts)}]" if parts else ""
+
+
 # ----------------------------------------------------------------------------
 # Category proposal and selection
 # ----------------------------------------------------------------------------
@@ -718,7 +733,6 @@ def review_transaction_categories(
     print_fn: Callable[..., None] = builtins.print,
     selector: Callable[[Iterable[str], str], str] | None = None,
     allow_create: bool | None = None,
-    auto_confirm_dupes: bool = False,
 ) -> list[CategorizedTransaction]:
     """Interactive review-and-persist flow for transaction categories.
 
@@ -833,7 +847,10 @@ def review_transaction_categories(
             for p in positions:
                 prefilled_assigned.add(p)
                 final[prepared[p].pos] = CategorizedTransaction(
-                    transaction=prepared[p].tx, category=db_default
+                    transaction=prepared[p].tx,
+                    category=db_default,
+                    rationale="rule: in-session duplicate default",
+                    score=1.0,
                 )
 
             prefilled_groups += 1
@@ -852,16 +869,36 @@ def review_transaction_categories(
         assigned |= prefilled_assigned
 
         # Compute remaining counts once per group root and consider only groups
-        # with remaining items. Sort by remaining size desc, tie-breaking by
-        # first index for determinism.
+        # with remaining items.
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
-        group_roots = [r for r, sz in rem_by_root.items() if sz > 0]
+        group_roots_all = [r for r, sz in rem_by_root.items() if sz > 0]
+
+        # Confidence gate (Issue #88): include only groups whose effective score > 0.7
+        # Effective score prefers revised_score when present; else score; missing -> None.
+        def _effective_score_for_group(root: int) -> float | None:
+            idxs = groups_map[root]
+            if not idxs:
+                return None
+            # Use first representative; categorize phase assigns one decision per group.
+            item = final[prepared[idxs[0]].pos]
+            # Prefer revised_score when present; else score; missing -> None.
+            return (
+                item.revised_score
+                if getattr(item, "revised_score", None) is not None
+                else getattr(item, "score", None)
+            )
+
+        MIN_CONFIDENCE = 0.7
+        group_roots = [
+            r for r in group_roots_all if (_effective_score_for_group(r) or 0.0) > MIN_CONFIDENCE
+        ]
         group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
         # Summary before review starts
+        gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         print_fn(
             _format_pre_review_summary(
-                prefilled_groups=prefilled_groups, remaining_by_root=rem_by_root
+                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
             )
         )
 
@@ -899,7 +936,10 @@ def review_transaction_categories(
             chosen_default = _select_default_category(
                 db_unanimous=db_default, group_items=group_items
             )
-            print_fn(f"Proposed category: {chosen_default}")
+            # Include shorthand confidence scores when available from the representative item.
+            rep_item = final[group_items[0].pos]
+            suffix = _format_score_shorthand(rep_item)
+            print_fn(f"Proposed category: {chosen_default}{suffix}")
 
             final_cat, category_changed = _select_category_for_group(
                 session=session,
@@ -939,7 +979,12 @@ def review_transaction_categories(
 
             # Update result list
             for prep in group_items:
-                final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
+                final[prep.pos] = CategorizedTransaction(
+                    transaction=prep.tx,
+                    category=final_cat,
+                    rationale="operator: selected",
+                    score=1.0,
+                )
 
             # Commit the primary group immediately to avoid rolling it back if
             # duplicate persistence fails later.

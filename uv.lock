@@ -158,6 +158,7 @@ dependencies = [
     { name = "openai" },
     { name = "pmap" },
     { name = "prompt-toolkit" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typer" },
 ]
@@ -168,6 +169,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.102.0" },
     { name = "pmap", editable = "libs/pmap" },
     { name = "prompt-toolkit", specifier = ">=3.0.47" },
+    { name = "pydantic", specifier = ">=2.11.7" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "typer", specifier = ">=0.12.3" },
 ]
