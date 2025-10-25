@@ -211,15 +211,11 @@ def _read_chunk_from_cache(
                         tuple(citations) if isinstance(citations, list) and citations else None
                     ),
                 }
-            # Provide conservative defaults when details are absent in cache
-            # Treat empty string as missing for better UX
-            if not kwargs.get("rationale"):
-                kwargs["rationale"] = "cache: missing details"
-            if "score" not in kwargs or kwargs.get("score") is None:
-                kwargs["score"] = 0.0
-            out.append(
-                CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs)
-            )
+            rationale = kwargs.get("rationale")
+            score = kwargs.get("score")
+            if rationale is None or score is None:
+                return None
+            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs))
         return out
     except Exception:
         return None
