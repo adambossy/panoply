@@ -165,6 +165,7 @@ def _query_group_duplicates(
     source_account: str | None,
     group_eids: list[str],
     group_fps: list[str],
+    group_merch_keys: list[str] | None,
     exemplars: int,
 ) -> tuple[list[tuple[str | None, Mapping[str, Any]]], str | None]:
     """Return a limited sample of duplicates and a unanimous default category.
@@ -178,6 +179,8 @@ def _query_group_duplicates(
         conds.append(FaTransaction.external_id.in_(group_eids))
     if group_fps:
         conds.append(FaTransaction.fingerprint_sha256.in_(group_fps))
+    if group_merch_keys:
+        conds.append(FaTransaction.merchant_norm.in_(group_merch_keys))
 
     rows: list[tuple[str | None, Mapping[str, Any]]] = []
     unanimous: str | None = None
@@ -821,6 +824,8 @@ def review_transaction_categories(
             group_items = [prepared[i] for i in positions]
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
+            # Merchant key for this in-session group (single key by construction)
+            group_merch_keys = [_k] if isinstance(_k, str) and _k else []
 
             _exemplars = 1  # no display required; keep IO small
             db_dupes, db_default = _query_group_duplicates(
@@ -829,6 +834,7 @@ def review_transaction_categories(
                 source_account=source_account,
                 group_eids=group_eids,
                 group_fps=group_fps,
+                group_merch_keys=group_merch_keys,
                 exemplars=_exemplars,
             )
             if not db_default:
@@ -916,12 +922,20 @@ def review_transaction_categories(
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
+            # Compute merchant keys present among remaining items (normally one)
+            kset: list[str] = []
+            for prep in group_items:
+                k = _norm_merchant_key(prep.tx)
+                if k is not None and k not in kset:
+                    kset.append(k)
+
             db_dupes, db_default = _query_group_duplicates(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
                 group_eids=group_eids,
                 group_fps=group_fps,
+                group_merch_keys=kset,
                 exemplars=exemplars,
             )
 

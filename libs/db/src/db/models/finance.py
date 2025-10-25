@@ -20,6 +20,8 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql import expression as sa_expr
+from sqlalchemy.sql.schema import Computed
 
 
 class Base(DeclarativeBase):
@@ -78,6 +80,30 @@ class FaTransaction(Base):
     date: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     merchant: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Normalized merchant/description key used for duplicate matching.
+    #
+    # Semantics align with the in-process grouping key in
+    # `packages/financial_analysis/review.py::_norm_merchant_key`:
+    # - prefer `merchant`; when empty/NULL, fall back to `description`;
+    # - collapse internal whitespace (tabs/newlines) to a single space;
+    # - trim leading/trailing spaces; lower-case the result.
+    #
+    # Postgres does not provide Python's full `casefold()`/NFKC behavior, so we
+    # approximate via LOWER() on a whitespace-collapsed string. This matches the
+    # vast majority of ASCII merchant strings seen in practice and keeps the
+    # computation immutable for a generated column + btree index.
+    merchant_norm: Mapped[str | None] = mapped_column(
+        Text,
+        Computed(
+            sa_expr.text(
+                "NULLIF(BTRIM(LOWER(REGEXP_REPLACE(COALESCE("\
+                "NULLIF(BTRIM(merchant), ''), NULLIF(BTRIM(description), '')), "\
+                "'[[:space:]]+', ' ', 'g'))), '')"
+            ),
+            persisted=True,
+        ),
+        nullable=True,
+    )
     memo: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional human-friendly label shown in UIs/reports. Raw provider fields
     # (description/merchant/raw_record) remain the source of truth for
