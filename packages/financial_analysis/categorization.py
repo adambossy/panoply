@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-# Prefer Pydantic for shape/typing validation to avoid manual isinstance chains.
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 # ---------------------------------------------------------------------------
