@@ -288,10 +288,10 @@ def get_or_compute_chunk(
                 category=r.category,
                 rationale=r.rationale,
                 score=r.score,
-                revised_category=getattr(r, "revised_category", None),
-                revised_rationale=getattr(r, "revised_rationale", None),
-                revised_score=getattr(r, "revised_score", None),
-                citations=getattr(r, "citations", None),
+                revised_category=r.revised_category,
+                revised_rationale=r.revised_rationale,
+                revised_score=r.revised_score,
+                citations=r.citations,
             )
         )
 
