@@ -202,23 +202,13 @@ def _categorize_page(
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     taxonomy: Sequence[Mapping[str, Any]],
+    allowed_categories: tuple[str, ...],
 ) -> PageResult:
     count, user_content = _build_page_payload(
         original_seq,
         base,
         end,
         taxonomy=taxonomy,
-    )
-
-    # Derive strict allow-list from taxonomy (dedupe, drop blanks) once per page
-    allowed: tuple[str, ...] = tuple(
-        dict.fromkeys(
-            c
-            for c in (
-                (str(d.get("code") or "").strip()) for d in taxonomy if isinstance(d, Mapping)
-            )
-            if c
-        )
     )
 
     # Instantiate the client once per page and reuse across retries.
@@ -235,7 +225,7 @@ def _categorize_page(
             )
             decoded = _extract_response_json_mapping(resp)
             page_categories = parse_and_align_categories(
-                decoded, num_items=count, allowed_categories=allowed
+                decoded, num_items=count, allowed_categories=allowed_categories
             )
             return PageResult(page_index=page_index, base=base, categories=page_categories)
         except Exception as e:  # noqa: BLE001
@@ -333,6 +323,16 @@ def categorize_expenses(
         format=response_format,
     )
 
+    allowed_categories: tuple[str, ...] = tuple(
+        dict.fromkeys(
+            c
+            for c in (
+                (str(d.get("code") or "").strip()) for d in taxonomy if isinstance(d, Mapping)
+            )
+            if c
+        )
+    )
+
     categories_by_abs_idx: list[str | None] = [None] * n_total
 
     try:
@@ -349,6 +349,7 @@ def categorize_expenses(
                     system_instructions=system_instructions,
                     text_cfg=text_cfg,
                     taxonomy=taxonomy,
+                    allowed_categories=allowed_categories,
                 )
             except Exception as e:  # noqa: BLE001
                 # Preserve ValueError semantics for validation/parse errors.
