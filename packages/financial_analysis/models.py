@@ -33,20 +33,29 @@ Notes
 
 @dataclass(frozen=True, slots=True)
 class CategorizedTransaction:
-    """A transaction paired with an assigned category.
+    """A transaction paired with an assigned (effective) category.
 
-    Attributes
-    ----------
-    transaction:
-        The original transaction record (opaque mapping of CSV columns).
-    category:
-        The assigned category label. The category ontology, normalization
-        rules, and allowed values are not defined here and will require
-        clarification (e.g., hierarchical categories, canonical casing).
+    ``category`` reflects the effective choice used by the application. When
+    the model provides a post-search revision, ``revised_category`` is treated
+    as authoritative and copied here for downstream flows. For observability,
+    model-provided details (rationale/score and any post-search ``revised_*``
+    fields, plus ``citations``) are carried directly on this model for each
+    item. ``rationale`` and ``score`` are required and used downstream (e.g.,
+    confidence gating before review).
     """
 
     transaction: TransactionRecord
     category: str
+    # Required details provided by the model (or caller) for this decision.
+    # These are required by the strict response schema and are used downstream
+    # (e.g., pre‑review confidence gating). Callers creating instances outside
+    # the LLM flow (e.g., rule/default assignments) must provide values.
+    rationale: str
+    score: float
+    revised_category: str | None = None
+    revised_rationale: str | None = None
+    revised_score: float | None = None
+    citations: tuple[str, ...] | None = None
 
 
 class RefundMatch(NamedTuple):

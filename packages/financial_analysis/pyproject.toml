@@ -11,6 +11,7 @@ dependencies = [
   # Workspace DB library (SQLAlchemy engine/session + models)
   "db>=0",
   "pmap",
+  "pydantic>=2.11.7",
 ]
 
 # Console script for `uv run categorize-expenses`

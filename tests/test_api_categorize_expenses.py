@@ -139,12 +139,14 @@ class _PagedOpenAIStub:
                     user_content = kwargs["input"]
                     items = _extract_ctv_from_user_content(user_content)
 
-                    # Simple synthetic categories (allowed)
+                    # Simple synthetic categories (allowed) with required fields
                     results = [
                         {
                             "idx": item["idx"],
                             "id": item.get("id"),
                             "category": "Other",
+                            "rationale": "baseline",
+                            "score": 0.95,
                         }
                         for item in items
                     ]
@@ -178,8 +180,20 @@ def test_happy_path_output_text(monkeypatch: pytest.MonkeyPatch):
     resp = Resp()
     resp.output_text = _mk_response_json(
         [
-            {"idx": 0, "id": "t1", "category": "Shopping"},
-            {"idx": 1, "id": "t2", "category": "Groceries"},
+            {
+                "idx": 0,
+                "id": "t1",
+                "category": "Shopping",
+                "rationale": "shop",
+                "score": 0.92,
+            },
+            {
+                "idx": 1,
+                "id": "t2",
+                "category": "Groceries",
+                "rationale": "food",
+                "score": 0.97,
+            },
         ]
     )
 
@@ -223,8 +237,20 @@ def test_happy_path_output_content_text_fallback(monkeypatch: pytest.MonkeyPatch
     resp = Resp(
         _mk_response_json(
             [
-                {"idx": 0, "id": "t1", "category": "Shopping"},
-                {"idx": 1, "id": "t2", "category": "Groceries"},
+                {
+                    "idx": 0,
+                    "id": "t1",
+                    "category": "Shopping",
+                    "rationale": "shop",
+                    "score": 0.91,
+                },
+                {
+                    "idx": 1,
+                    "id": "t2",
+                    "category": "Groceries",
+                    "rationale": "food",
+                    "score": 0.96,
+                },
             ]
         )
     )
@@ -248,8 +274,20 @@ def test_invalid_category_falls_back_to_other(monkeypatch: pytest.MonkeyPatch):
     resp = Resp()
     resp.output_text = _mk_response_json(
         [
-            {"idx": 0, "id": "t1", "category": "FooBar"},  # invalid
-            {"idx": 1, "id": "t2", "category": "Groceries"},
+            {
+                "idx": 0,
+                "id": "t1",
+                "category": "FooBar",  # invalid
+                "rationale": "x",
+                "score": 0.9,
+            },
+            {
+                "idx": 1,
+                "id": "t2",
+                "category": "Groceries",
+                "rationale": "ok",
+                "score": 0.95,
+            },
         ]
     )
 
@@ -270,8 +308,20 @@ def test_alignment_by_idx_out_of_order(monkeypatch: pytest.MonkeyPatch):
     resp = Resp()
     resp.output_text = _mk_response_json(
         [
-            {"idx": 1, "id": "t2", "category": "Groceries"},
-            {"idx": 0, "id": "t1", "category": "Shopping"},
+            {
+                "idx": 1,
+                "id": "t2",
+                "category": "Groceries",
+                "rationale": "food",
+                "score": 0.96,
+            },
+            {
+                "idx": 0,
+                "id": "t1",
+                "category": "Shopping",
+                "rationale": "shop",
+                "score": 0.91,
+            },
         ]
     )
 
@@ -390,25 +440,25 @@ def test_empty_input_returns_empty_iterable(monkeypatch: pytest.MonkeyPatch):
     "n, expected_calls",
     [
         (0, 0),
-        (50, 1),
-        (100, 1),
-        (101, 2),
-        (200, 2),
-        (250, 3),
-        (1234, 13),  # 12x100 + 1x34
+        (50, 5),
+        (100, 10),
+        (101, 11),
+        (200, 20),
+        (250, 25),
+        (1234, 124),  # 123x10 + 1x4
     ],
 )
 def test_pagination_call_counts_and_sizes(
     monkeypatch: pytest.MonkeyPatch, n: int, expected_calls: int
 ):
-    # Build N synthetic transactions in input order; IDs are stable but unused by alignment.
+    # Build N synthetic transactions in input order; ensure unique groups via merchant.
     txs = [
         {
             "id": f"tx{i}",
             "description": f"desc {i}",
             "amount": -1.0,
             "date": "2025-09-01",
-            "merchant": "M",
+            "merchant": f"M{i}",
             "memo": None,
         }
         for i in range(n)
@@ -420,11 +470,11 @@ def test_pagination_call_counts_and_sizes(
 
     out = list(_categorize_expenses(txs, taxonomy=TEST_TAXONOMY))
 
-    # Count calls and verify page sizes never exceed the default (100)
+    # Count calls and verify page sizes never exceed the default (10)
     assert len(calls) == expected_calls
     for call in calls:
         items = _extract_ctv_from_user_content(call["input"])
-        assert len(items) <= 100
+        assert len(items) <= 10
 
     # Output shape and order preserved
     assert len(out) == n
@@ -442,7 +492,7 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
             "description": f"desc {i}",
             "amount": -1.0,
             "date": "2025-09-01",
-            "merchant": "M",
+            "merchant": f"M{i}",
             "memo": None,
         }
         for i in range(n)
@@ -463,14 +513,14 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
 
 def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
     # Choose N to produce many pages and add a small sleep per call to expose concurrency.
-    n = 1000  # 10 pages at default page size (100)
+    n = 1000  # 100 pages at default page size (10)
     txs = [
         {
             "id": f"tx{i}",
             "description": f"desc {i}",
             "amount": -1.0,
             "date": "2025-09-01",
-            "merchant": "M",
+            "merchant": f"M{i}",
             "memo": None,
         }
         for i in range(n)
@@ -482,7 +532,7 @@ def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
 
     out = list(_categorize_expenses(txs, taxonomy=TEST_TAXONOMY))
     assert len(out) == n
-    # 10 pages → 10 calls
-    assert len(calls) == 10
+    # 100 pages → 100 calls
+    assert len(calls) == 100
     # Observed in-flight maximum must not exceed the cap of 4
     assert stub.max_inflight <= 4
