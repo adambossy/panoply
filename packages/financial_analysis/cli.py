@@ -451,13 +451,13 @@ def cmd_review_transaction_categories(
         return 0
 
     # Chunk size: fixed at 250 by default; allow a dev override via env
-    _env_sz = os.getenv("FA_REVIEW_CHUNK_SIZE")
+    _env_sz = os.getenv("FA_REVIEW_PAGE_SIZE")
     try:
-        chunk_size = int(_env_sz) if _env_sz else 250
+        chunk_size = int(_env_sz) if _env_sz else 10
         if chunk_size <= 0:
             raise ValueError
     except Exception:
-        chunk_size = 250
+        chunk_size = 10
 
     # Load the canonical taxonomy from the DB (uses provided database_url)
     try:
