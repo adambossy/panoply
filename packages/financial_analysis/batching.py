@@ -9,7 +9,7 @@ Public helpers used by the CLI review flow:
 - ``spawn_background_chunk_worker``: sequentially pre-compute future chunks on
   a background thread while the operator reviews the current chunk.
 
-Cache layout (relative to the cache root, default: ``./.transactions``):
+Cache layout (relative to the cache root, default: ``./.cache``):
 
 ``<cache_root>/<dataset_id>/chunks/batch-00000.json``
 
@@ -56,7 +56,7 @@ SCHEMA_VERSION: int = 2
 def _get_cache_root() -> Path:
     """Return the cache root directory.
 
-    Default: ``./.transactions`` under the current working directory.
+    Default: ``./.cache`` under the current working directory.
     Override: ``FA_CACHE_DIR`` environment variable (absolute or relative).
     """
 
@@ -64,7 +64,7 @@ def _get_cache_root() -> Path:
     if root and root.strip():
         return Path(root).expanduser().resolve()
     # Use CWD by default, per #54 owner decision
-    return (Path.cwd() / ".transactions").resolve()
+    return (Path.cwd() / ".cache").resolve()
 
 
 def _settings_hash(
