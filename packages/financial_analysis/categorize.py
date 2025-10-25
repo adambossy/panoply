@@ -461,42 +461,29 @@ def categorize_expenses(
     # Hold per-group parsed details keyed by exemplar absolute index
     group_details_by_exemplar: dict[int, dict[str, Any]] = {}
 
-    try:
-        # Build pages over exemplars
-        pages: list[list[int]] = []
-        for _, base, end in _paginate(n_groups, page_size):
-            pages.append(exemplars[base:end])
+    # Build pages over exemplars
+    pages: list[list[int]] = []
+    for _, base, end in _paginate(n_groups, page_size):
+        pages.append(exemplars[base:end])
 
-        def _map_page(page_index_and_indices: tuple[int, list[int]]) -> PageResult:
-            page_index, indices = page_index_and_indices
-            try:
-                return _categorize_page(
-                    page_index,
-                    exemplar_abs_indices=indices,
-                    original_seq=original_seq,
-                    system_instructions=system_instructions,
-                    text_cfg=text_cfg,
-                    taxonomy=taxonomy,
-                )
-            except Exception as e:  # noqa: BLE001
-                if isinstance(e, ValueError):
-                    raise
-                raise RuntimeError(f"categorize_expenses failed for page_index={page_index}") from e
+    def _map_page(page_index_and_indices: tuple[int, list[int]]) -> PageResult:
+        page_index, indices = page_index_and_indices
+        return _categorize_page(
+            page_index,
+            exemplar_abs_indices=indices,
+            original_seq=original_seq,
+            system_instructions=system_instructions,
+            text_cfg=text_cfg,
+            taxonomy=taxonomy,
+        )
 
-        page_inputs: list[tuple[int, list[int]]] = [(i, pg) for i, pg in enumerate(pages)]
-        page_results: list[PageResult] = p_map(
-            page_inputs, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
-        )
-        for page in page_results:
-            for exemplar_abs_idx, item in page.results:
-                group_details_by_exemplar[exemplar_abs_idx] = item
-    except Exception as e:
-        _logger.error(
-            "categorize_expenses:pmap_exception error=%s error_type=%s",
-            str(e),
-            e.__class__.__name__,
-        )
-        raise
+    page_inputs: list[tuple[int, list[int]]] = [(i, pg) for i, pg in enumerate(pages)]
+    page_results: list[PageResult] = p_map(
+        page_inputs, _map_page, concurrency=_CONCURRENCY, stop_on_error=True
+    )
+    for page in page_results:
+        for exemplar_abs_idx, item in page.results:
+            group_details_by_exemplar[exemplar_abs_idx] = item
 
     # Fan out group-level decisions to all members via helper
     results: list[CategorizedTransaction] = _fan_out_group_decisions(
