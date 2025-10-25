@@ -211,7 +211,15 @@ def _read_chunk_from_cache(
                         tuple(citations) if isinstance(citations, list) and citations else None
                     ),
                 }
-            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs))
+            # Provide conservative defaults when details are absent in cache
+            # Treat empty string as missing for better UX
+            if not kwargs.get("rationale"):
+                kwargs["rationale"] = "cache: missing details"
+            if "score" not in kwargs or kwargs.get("score") is None:
+                kwargs["score"] = 0.0
+            out.append(
+                CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs)
+            )
         return out
     except Exception:
         return None
@@ -307,7 +315,19 @@ def get_or_compute_chunk(
     for r in results:
         tx = dict(r.transaction)
         tx.setdefault("provider", source_provider)
-        to_cache.append(CategorizedTransaction(transaction=tx, category=r.category))
+        # Preserve LLM details in cache by forwarding inlined fields.
+        to_cache.append(
+            CategorizedTransaction(
+                transaction=tx,
+                category=r.category,
+                rationale=r.rationale,
+                score=r.score,
+                revised_category=getattr(r, "revised_category", None),
+                revised_rationale=getattr(r, "revised_rationale", None),
+                revised_score=getattr(r, "revised_score", None),
+                citations=getattr(r, "citations", None),
+            )
+        )
 
     _write_chunk_to_cache(meta, to_cache)
     # Return results with the original tx objects (without provider field addition)

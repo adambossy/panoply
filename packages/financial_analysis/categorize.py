@@ -363,18 +363,14 @@ def _fan_out_group_decisions(
     for i in singleton_indices:
         members_by_exemplar[i].append(i)
 
-    # Start with Unknown placeholders to preserve order; fill per group below.
-    results: list[CategorizedTransaction] = [
-        CategorizedTransaction(transaction=tx, category="Unknown") for tx in original_seq
-    ]
+    # Prepare an output list and fill per group below. We avoid constructing
+    # placeholders because `CategorizedTransaction` now requires `rationale`
+    # and `score`.
+    results: list[CategorizedTransaction | None] = [None] * len(original_seq)
 
     for exemplar_abs_idx, members in members_by_exemplar.items():
         details = group_details_by_exemplar.get(exemplar_abs_idx)
-        if details is None:  # pragma: no cover - defensive
-            # Should not happen; treat as Unknown and omit optional details.
-            cat_effective = "Unknown"
-            detail_kwargs: dict[str, Any] = {}
-        else:
+        if details is not None:
             cat = cast(str, details.get("category"))
             revised_cat = details.get("revised_category")
             cat_effective = cast(str, (revised_cat or cat))
@@ -385,20 +381,41 @@ def _fan_out_group_decisions(
                 citations_tuple = tuple(cits)
             else:
                 citations_tuple = None
-            detail_kwargs = {
-                "rationale": cast(str | None, details.get("rationale")),
-                "score": cast(float | None, details.get("score")),
-                "revised_category": cast(str | None, details.get("revised_category")),
-                "revised_rationale": cast(str | None, details.get("revised_rationale")),
-                "revised_score": cast(float | None, details.get("revised_score")),
-                "citations": citations_tuple,
-            }
+            rationale_any = details.get("rationale")
+            score_any = details.get("score")
+            if not isinstance(rationale_any, str) or not rationale_any.strip():
+                raise RuntimeError(
+                    f"Missing or empty rationale for exemplar {exemplar_abs_idx}"
+                )
+            if not isinstance(score_any, int | float):
+                raise RuntimeError(f"Missing score for exemplar {exemplar_abs_idx}")
+            rationale_val = rationale_any.strip()
+            score_val = float(score_any)
+            revised_category_val = cast(str | None, details.get("revised_category"))
+            revised_rationale_val = cast(str | None, details.get("revised_rationale"))
+            revised_score_val = cast(float | None, details.get("revised_score"))
+        else:  # pragma: no cover - defensive: missing details for a group
+            raise RuntimeError(
+                f"Internal error: missing parsed details for exemplar index {exemplar_abs_idx}"
+            )
         for m in members:
             results[m] = CategorizedTransaction(
-                transaction=original_seq[m], category=cat_effective, **detail_kwargs
+                transaction=original_seq[m],
+                category=cat_effective,
+                rationale=rationale_val,
+                score=score_val,
+                revised_category=revised_category_val,
+                revised_rationale=revised_rationale_val,
+                revised_score=revised_score_val,
+                citations=citations_tuple,
             )
 
-    return results
+    # Validate all positions were filled exactly once
+    missing = [i for i, v in enumerate(results) if v is None]
+    if missing:  # pragma: no cover - defensive
+        raise RuntimeError(f"Internal error: missing categorized results at indices {missing}")
+    # Cast away None for the type checker
+    return [cast(CategorizedTransaction, r) for r in results]
 
 
 def categorize_expenses(

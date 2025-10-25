@@ -848,7 +848,10 @@ def review_transaction_categories(
             for p in positions:
                 prefilled_assigned.add(p)
                 final[prepared[p].pos] = CategorizedTransaction(
-                    transaction=prepared[p].tx, category=db_default
+                    transaction=prepared[p].tx,
+                    category=db_default,
+                    rationale="rule: in-session duplicate default",
+                    score=1.0,
                 )
 
             prefilled_groups += 1
@@ -977,7 +980,12 @@ def review_transaction_categories(
 
             # Update result list
             for prep in group_items:
-                final[prep.pos] = CategorizedTransaction(transaction=prep.tx, category=final_cat)
+                final[prep.pos] = CategorizedTransaction(
+                    transaction=prep.tx,
+                    category=final_cat,
+                    rationale="operator: selected",
+                    score=1.0,
+                )
 
             # Commit the primary group immediately to avoid rolling it back if
             # duplicate persistence fails later.
