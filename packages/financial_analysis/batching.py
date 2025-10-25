@@ -197,25 +197,9 @@ def _read_chunk_from_cache(
         for i, ent in enumerate(items):
             tx = ctv_items[meta.base + i]
             # Optional llm details (nested in cache); map to inlined fields
-            details = ent.get("llm")
-            kwargs: dict[str, Any] = {}
-            if isinstance(details, dict):
-                citations = details.get("citations")
-                kwargs = {
-                    "rationale": details.get("rationale"),
-                    "score": details.get("score"),
-                    "revised_category": details.get("revised_category"),
-                    "revised_rationale": details.get("revised_rationale"),
-                    "revised_score": details.get("revised_score"),
-                    "citations": (
-                        tuple(citations) if isinstance(citations, list) and citations else None
-                    ),
-                }
-            rationale = kwargs.get("rationale")
-            score = kwargs.get("score")
-            if rationale is None or score is None:
-                return None
-            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **kwargs))
+            details = ent.get("llm", {})
+            details["citations"] = tuple(details.get("citations", []))
+            out.append(CategorizedTransaction(transaction=tx, category=ent["category"], **details))
         return out
     except Exception:
         return None
