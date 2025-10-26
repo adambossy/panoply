@@ -293,9 +293,3 @@ def write_page_to_cache(
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
         raise
-
-
-# Back-compat note: dataset-level helpers were used in an earlier iteration of
-# this PR. We keep the identifier helper and migrate caching to page files. The
-# previous dataset-wide read/write functions have been removed from the public
-# API to avoid encouraging whole-dataset caching.
