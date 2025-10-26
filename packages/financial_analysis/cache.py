@@ -30,6 +30,7 @@ from typing import Any
 
 from . import prompting
 from .models import LlmDecision, PageCacheFile, PageExemplar, PageItem
+from .logging_setup import get_logger
 from .persistence import compute_fingerprint
 
 # Page-cache schema version (independent from any other cache schema versions).
@@ -38,6 +39,9 @@ SCHEMA_VERSION: int = 1
 
 
 _DATASET_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+_logger = get_logger("financial_analysis.cache")
 
 
 def _validate_dataset_id(dataset_id: str) -> str:
@@ -182,11 +186,22 @@ def read_page_from_cache(
     if not path.exists():
         return None
 
-    # Parse and validate structure with Pydantic; reject unknowns/coercions
-    text = path.read_text(encoding="utf-8")
     try:
+        text = path.read_text(encoding="utf-8")
+        # Parse and validate structure with Pydantic; reject unknowns/coercions
         parsed = PageCacheFile.model_validate_json(text)
-    except Exception:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _logger.debug(
+            (
+                "page_cache:read_failed; falling back to compute "
+                "dataset_id=%s page_index=%d page_size=%d path=%s"
+            ),
+            dataset_id,
+            page_index,
+            page_size,
+            os.fspath(path),
+            exc_info=True,
+        )
         return None
 
     # Cheap identity checks; treat any mismatch as a cache miss.
