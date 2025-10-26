@@ -96,8 +96,8 @@ class FaTransaction(Base):
         Text,
         Computed(
             sa_expr.text(
-                "NULLIF(BTRIM(LOWER(REGEXP_REPLACE(COALESCE("\
-                "NULLIF(BTRIM(merchant), ''), NULLIF(BTRIM(description), '')), "\
+                "NULLIF(BTRIM(LOWER(REGEXP_REPLACE(COALESCE("
+                "NULLIF(BTRIM(merchant), ''), NULLIF(BTRIM(description), '')), "
                 "'[[:space:]]+', ' ', 'g'))), '')"
             ),
             persisted=True,
