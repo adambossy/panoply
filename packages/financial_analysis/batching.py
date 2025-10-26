@@ -34,11 +34,9 @@ import hashlib
 import json
 import math
 import os
-import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Thread
 from typing import Any
 
 from . import prompting
@@ -298,44 +296,6 @@ def get_or_compute_chunk(
     _write_chunk_to_cache(meta, to_cache)
     # Return results with the original tx objects (without provider field addition)
     return results
-
-
-def spawn_background_chunk_worker(
-    *,
-    dataset_id: str,
-    start_chunk: int,
-    total_chunks: int,
-    ctv_items: list[Mapping[str, Any]],
-    source_provider: str,
-    chunk_size: int = 250,
-    on_chunk_done: Callable[[int, float], None] | None = None,
-    taxonomy: Sequence[Mapping[str, Any]],
-) -> Thread:
-    """Start a background worker that sequentially computes chunks start..N-1."""
-
-    def _run() -> None:
-        for k in range(start_chunk, total_chunks):
-            t0 = time.perf_counter()
-            try:
-                get_or_compute_chunk(
-                    dataset_id,
-                    k,
-                    ctv_items,
-                    source_provider=source_provider,
-                    chunk_size=chunk_size,
-                    taxonomy=taxonomy,
-                )
-            except Exception:
-                # Intentionally swallow to avoid crashing the main thread; the
-                # foreground will surface errors when it reaches this chunk.
-                pass
-            else:
-                if on_chunk_done is not None:
-                    on_chunk_done(k, time.perf_counter() - t0)
-
-    th = Thread(target=_run, name=f"fa-chunk-worker-{start_chunk}-{total_chunks}", daemon=True)
-    th.start()
-    return th
 
 
 def total_chunks_for(total: int, *, chunk_size: int) -> int:
