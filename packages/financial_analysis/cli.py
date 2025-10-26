@@ -431,9 +431,9 @@ def cmd_review_transaction_categories(
     # Categorize only unresolved items using dataset-level cache. This defers
     # all batching to `categorize_expenses` (pages of 10 via p_map).
     try:
-        from .batching import compute_dataset_id, get_or_compute_all
+        from .cache import compute_dataset_id, get_or_compute_all
     except Exception as e:
-        print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
+        print(f"Error: failed to import cache helpers: {e}", file=sys.stderr)
         return 1
 
     dataset_id = compute_dataset_id(
@@ -446,13 +446,11 @@ def cmd_review_transaction_categories(
     print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
 
     try:
-        all_unresolved_suggestions = list(
-            get_or_compute_all(
-                dataset_id,
-                unresolved_ctv,
-                source_provider=source_provider,
-                taxonomy=taxonomy,
-            )
+        all_unresolved_suggestions = get_or_compute_all(
+            dataset_id,
+            unresolved_ctv,
+            source_provider=source_provider,
+            taxonomy=taxonomy,
         )
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
