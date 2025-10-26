@@ -12,9 +12,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
-# Pydantic is used for typed cache DTOs and validation of LLM decision details.
-# Keeping these models here (rather than a separate module) matches the owner's
-# guidance in issue #107 to colocate DTOs with other public models.
 from pydantic import BaseModel, ConfigDict, field_validator
 
 # ---------------------------------------------------------------------------
