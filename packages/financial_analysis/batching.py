@@ -8,18 +8,12 @@ Public helpers used by the CLI review flow:
   single call to :func:`financial_analysis.categorize.categorize_expenses`,
   reading/writing a single dataset-level cache file. This preserves on‑disk
   cache semantics without introducing a second batching layer.
-- ``get_or_compute_chunk``: legacy per‑chunk cache used by older flows; kept
-  for compatibility with tools that still depend on it.
 
 Cache layout (relative to the cache root, default: ``./.cache``):
 
 - Dataset (preferred for review path):
 
   ``<cache_root>/<dataset_id>/dataset.json``
-
-- Legacy chunk files (still supported for other callers):
-
-  ``<cache_root>/<dataset_id>/chunks/batch-00000.json``
 
 Each chunk file contains::
 
@@ -40,7 +34,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -423,71 +416,3 @@ def _write_chunk_to_cache(meta: _ChunkMeta, items: list[CategorizedTransaction])
         items_out.append(entry)
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
-
-
-# ----------------------------------------------------------------------------
-# Public chunk API
-# ----------------------------------------------------------------------------
-
-
-def get_or_compute_chunk(
-    dataset_id: str,
-    chunk_idx: int,
-    ctv_items: list[Mapping[str, Any]],
-    *,
-    source_provider: str,
-    chunk_size: int = 250,
-    taxonomy: Sequence[Mapping[str, Any]],
-) -> list[CategorizedTransaction]:
-    """Return categorized results for the ``chunk_idx`` slice.
-
-    Order is preserved and aligned to ``ctv_items[base:end]``.
-    """
-
-    total = len(ctv_items)
-    base, end = _chunk_bounds(chunk_idx, total=total, chunk_size=chunk_size)
-    # Use taxonomy to compute settings hash
-    meta = _ChunkMeta(
-        dataset_id=dataset_id,
-        chunk_idx=chunk_idx,
-        base=base,
-        end=end,
-        settings_hash=_settings_hash(taxonomy),
-        provider=source_provider,
-    )
-
-    cached = _read_chunk_from_cache(meta, ctv_items=ctv_items)
-    if cached is not None:
-        return cached
-
-    # Compute now and persist to cache atomically
-    from .categorize import categorize_expenses
-
-    slice_items = ctv_items[base:end]
-    results = list(categorize_expenses(slice_items, taxonomy=taxonomy))
-    # Add provider to transactions for stable fingerprinting in cache (non-destructive copy)
-    to_cache: list[CategorizedTransaction] = []
-    for r in results:
-        tx = dict(r.transaction)
-        tx.setdefault("provider", source_provider)
-        # Preserve LLM details in cache by forwarding inlined fields.
-        to_cache.append(
-            CategorizedTransaction(
-                transaction=tx,
-                category=r.category,
-                rationale=r.rationale,
-                score=r.score,
-                revised_category=r.revised_category,
-                revised_rationale=r.revised_rationale,
-                revised_score=r.revised_score,
-                citations=r.citations,
-            )
-        )
-
-    _write_chunk_to_cache(meta, to_cache)
-    # Return results with the original tx objects (without provider field addition)
-    return results
-
-
-def total_chunks_for(total: int, *, chunk_size: int) -> int:
-    return math.ceil(total / max(1, chunk_size))
