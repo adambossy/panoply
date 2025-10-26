@@ -80,9 +80,6 @@ def _compute_one(
     return idx, items, time.perf_counter() - t0_local
 
 
-
-
-
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``financial_analysis`` CLI (stub).
 
