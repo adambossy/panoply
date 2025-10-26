@@ -117,6 +117,7 @@ def review_transaction_categories(
     source_account: str | None,
     database_url: str | None = None,
     exemplars: int = 5,
+    prefilled_groups: int = 0,
     select_category_fn=None,
     allow_create: bool | None = None,
 ) -> list[CategorizedTransaction]:
@@ -135,6 +136,7 @@ def review_transaction_categories(
         source_account=source_account,
         database_url=database_url,
         exemplars=exemplars,
+        prefilled_groups=prefilled_groups,
         selector=select_category_fn,
         allow_create=allow_create,
     )

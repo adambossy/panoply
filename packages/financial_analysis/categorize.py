@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 """Expense categorization flow extracted from ``api.py``.
 
 Public API:
@@ -29,6 +30,8 @@ from .categorization import (
 )
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
+# DB/session and review helpers are imported lazily inside functions where
+# needed to avoid side effects at import time and to limit dependency surface.
 
 # ---- Tunables (private) ------------------------------------------------------
 
@@ -324,6 +327,98 @@ def _group_by_normalized_merchant(
     exemplars.sort()
 
     return exemplars, by_key, singleton_indices
+
+
+def prefill_unanimous_groups_from_db(
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    database_url: str | None,
+    source_provider: str,
+    source_account: str | None,
+) -> tuple[set[int], int]:
+    """Auto-assign unanimous DB categories per group and persist them.
+
+    Groups transactions by normalized merchant, queries duplicates in the DB
+    within the given ``(source_provider, source_account)`` scope, and when all
+    non-null categories agree for a group, persists that category for all
+    positions in the group. Returns a tuple of ``(prefilled_positions,
+    prefilled_groups)``.
+
+    Raises a ``RuntimeError`` with context on grouping failures; DB and
+    persistence errors are propagated as-is to the caller.
+    """
+
+    # Local imports keep module import cheap and avoid global DB dependencies
+    from db.client import session_scope  # noqa: I001
+
+    from .review import (  # noqa: I001
+        _PreparedItem as _ReviewPreparedItem,
+        _query_group_duplicates as _review_query_group_duplicates,
+        _persist_group as _review_persist_group,
+    )
+    from .persistence import compute_fingerprint  # noqa: I001
+
+    try:
+        _exemplars, by_key, _singletons = _group_by_normalized_merchant(ctv_items)
+    except Exception as e:  # pragma: no cover - defensive clarity
+        raise RuntimeError(f"failed to group transactions: {e}") from e
+
+    prefilled_positions: set[int] = set()
+    prefilled_groups = 0
+
+    with session_scope(database_url=database_url) as session:
+        for positions in by_key.values():
+            if not positions:
+                continue
+
+            # Build identifiers for DB lookup
+            group_eids: list[str] = []
+            group_fps: list[str] = []
+            group_items: list[_ReviewPreparedItem] = []
+            for i in positions:
+                tx = ctv_items[i]
+                tx_id_val = tx.get("id")
+                eid = str(tx_id_val).strip() if tx_id_val is not None else None
+                if eid:
+                    group_eids.append(eid)
+                fp = compute_fingerprint(source_provider=source_provider, tx=tx)
+                group_fps.append(fp)
+                group_items.append(
+                    _ReviewPreparedItem(
+                        pos=i,
+                        tx=tx,
+                        suggested="",  # not used in persistence path
+                        external_id=eid,
+                        fingerprint=fp,
+                    )
+                )
+
+            # Query duplicates once per group; when unanimous, auto-apply
+            _dupes, unanimous = _review_query_group_duplicates(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_eids=group_eids,
+                group_fps=group_fps,
+                exemplars=1,
+            )
+            if not unanimous:
+                continue
+
+            _review_persist_group(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_items=group_items,
+                final_cat=unanimous,
+                category_source="rule",
+            )
+            session.commit()
+
+            prefilled_positions.update(positions)
+            prefilled_groups += 1
+
+    return prefilled_positions, prefilled_groups
 
 
 def _fan_out_group_decisions(

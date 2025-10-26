@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from typer.models import OptionInfo
 
 from .categories import load_taxonomy_from_db
+from .categorize import prefill_unanimous_groups_from_db
 from .logging_setup import configure_logging
 
 
@@ -437,18 +438,58 @@ def cmd_review_transaction_categories(
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Categorize in chunks with on-disk caching and only start review once all
-    # batches have finished (per Issue #70).
+    total = len(ctv_items)
+    if total == 0:
+        print("No transactions to review.")
+        return 0
+
+    # DB-first prefill: resolve groups that have a unanimous DB category
+    try:
+        prefilled_positions, prefilled_groups = prefill_unanimous_groups_from_db(
+            ctv_items,
+            database_url=database_url,
+            source_provider=source_provider,
+            source_account=source_account,
+        )
+    except Exception as e:
+        print(f"Error: DB prefill failed: {e}", file=sys.stderr)
+        return 1
+
+    # Build unresolved subset in original order
+    unresolved_indices: list[int] = [i for i in range(total) if i not in (prefilled_positions)]
+    unresolved_ctv: list = [ctv_items[i] for i in unresolved_indices]
+
+    # When everything was resolved from DB, jump straight to the (no-op) review
+    # with an empty list so the pre-review summary/exit path remains familiar.
+    if len(unresolved_ctv) == 0:
+        try:
+            review_transaction_categories(
+                [],
+                source_provider=source_provider,
+                source_account=source_account,
+                database_url=database_url,
+                prefilled_groups=prefilled_groups,
+                allow_create=allow_create,
+            )
+        except Exception as e:
+            print(f"Error: review failed: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    # Load the canonical taxonomy from the DB (uses provided database_url)
+    try:
+        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
+    except Exception as e:
+        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
+        return 1
+
+    # Categorize only unresolved items using the on-disk cache keyed to the
+    # subset (excludes already-resolved groups from dataset_id per Issue #F).
     try:
         from .batching import compute_dataset_id, total_chunks_for
     except Exception as e:
         print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
         return 1
-
-    total = len(ctv_items)
-    if total == 0:
-        print("No transactions to review.")
-        return 0
 
     # Chunk size: fixed at 250 by default; allow a dev override via env
     _env_sz = os.getenv("FA_REVIEW_PAGE_SIZE")
@@ -459,32 +500,21 @@ def cmd_review_transaction_categories(
     except Exception:
         chunk_size = 10
 
-    # Load the canonical taxonomy from the DB (uses provided database_url)
-    try:
-        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
-    except Exception as e:
-        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
-        return 1
     dataset_id = compute_dataset_id(
-        ctv_items,
+        unresolved_ctv,
         source_provider=source_provider,
         taxonomy=taxonomy,
     )
-    n_chunks = total_chunks_for(total, chunk_size=chunk_size)
+    n_chunks = total_chunks_for(len(unresolved_ctv), chunk_size=chunk_size)
 
     print()
     print(f"Waiting for LLM ({n_chunks} chunks)…")
 
-    # Compute all chunks up front in parallel; keep cache semantics unchanged.
-    # Print a short timing line as each batch completes. Preserve overall
-    # output order by assembling results by chunk index after completion.
-    all_suggestions: list = []
+    # Compute all chunks for the unresolved subset
+    all_unresolved_suggestions: list = []
     try:
-        # Bounded worker pool; default to a conservative level unless overridden.
         max_workers = _resolve_max_workers(n_chunks)
-
         results_by_idx: dict[int, list] = {}
-
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fa-chunk") as ex:
             fut_to_idx = {}
             for k in range(n_chunks):
@@ -492,7 +522,7 @@ def cmd_review_transaction_categories(
                     _compute_one,
                     k,
                     dataset_id=dataset_id,
-                    ctv_items=ctv_items,
+                    ctv_items=unresolved_ctv,
                     source_provider=source_provider,
                     chunk_size=chunk_size,
                     taxonomy=taxonomy,
@@ -511,20 +541,29 @@ def cmd_review_transaction_categories(
                 results_by_idx[idx] = items_k
                 print(f"Batch {idx + 1}/{n_chunks} finished in {dt:.1f}s")
 
-        # Assemble in index order to preserve deterministic output ordering
         for k in range(n_chunks):
-            all_suggestions.extend(results_by_idx[k])
+            all_unresolved_suggestions.extend(results_by_idx[k])
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
         return 1
 
-    # Begin a single consolidated review pass.
+    # Sanity check: LLM results must match unresolved item count
+    if len(all_unresolved_suggestions) != len(unresolved_indices):
+        print(
+            "Error: internal alignment error (unresolved results size mismatch)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Begin review for unresolved groups only (pass only the unresolved subset
+    # so the interactive UI processes fewer groups as intended).
     try:
         review_transaction_categories(
-            all_suggestions,
+            all_unresolved_suggestions,
             source_provider=source_provider,
             source_account=source_account,
             database_url=database_url,
+            prefilled_groups=prefilled_groups,
             allow_create=allow_create,
         )
     except Exception as e:
