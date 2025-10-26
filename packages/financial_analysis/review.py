@@ -711,14 +711,14 @@ def _format_pre_review_summary(
 ) -> str:
     """Return the one-line pre-review summary message.
 
-    Example: "Auto-applied to 3 groups; 12 groups remaining for review, largest size = 7"
+    Example: "Auto-applied to 3 groups; 12 low-confidence groups remain; largest size = 7"
     """
     remaining_sizes = [sz for sz in remaining_by_root.values() if sz > 0]
     remaining_groups = len(remaining_sizes)
     largest_group = max(remaining_sizes) if remaining_sizes else 0
     return (
-        f"Auto-applied to {prefilled_groups} groups; {remaining_groups} groups "
-        f"remaining for review, largest size = {largest_group}"
+        f"Auto-applied to {prefilled_groups} groups; {remaining_groups} low-confidence groups "
+        f"remain; largest size = {largest_group}"
     )
 
 
@@ -873,8 +873,10 @@ def review_transaction_categories(
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
         group_roots_all = [r for r, sz in rem_by_root.items() if sz > 0]
 
-        # Confidence gate (Issue #88): include only groups whose effective score > 0.7
-        # Effective score prefers revised_score when present; else score; missing -> None.
+        # Confidence gate (Issue #94): include only low‑confidence groups whose
+        # effective score ≤ 0.7. Effective score prefers ``revised_score`` when
+        # present; else ``score``; missing -> None (treated as 0.0 so such items
+        # enter review).
         def _effective_score_for_group(root: int) -> float | None:
             idxs = groups_map[root]
             if not idxs:
@@ -890,7 +892,7 @@ def review_transaction_categories(
 
         MIN_CONFIDENCE = 0.7
         group_roots = [
-            r for r in group_roots_all if (_effective_score_for_group(r) or 0.0) > MIN_CONFIDENCE
+            r for r in group_roots_all if (_effective_score_for_group(r) or 0.0) <= MIN_CONFIDENCE
         ]
         group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
