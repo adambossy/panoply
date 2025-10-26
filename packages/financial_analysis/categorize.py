@@ -420,10 +420,6 @@ def prefill_unanimous_groups_from_db(
 
     return prefilled_positions, prefilled_groups
 
-# Backwards-compat alias for in-repo callers updated in the same PR.
-# Keep briefly to avoid churn across modules during the transition.
-_prefill_unanimous_groups_from_db = prefill_unanimous_groups_from_db
-
 
 def _fan_out_group_decisions(
     original_seq: list[Mapping[str, Any]],
