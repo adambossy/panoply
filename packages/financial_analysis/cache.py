@@ -29,13 +29,13 @@ from pathlib import Path
 from typing import Any
 
 from . import prompting
-from .models import LlmDecision, PageCacheFile, PageExemplar, PageItem
 from .logging_setup import get_logger
+from .models import LlmDecision, PageCacheFile, PageExemplar, PageItem
 from .persistence import compute_fingerprint
 
 # Page-cache schema version (independent from any other cache schema versions).
-# Start at 1 per owner and bump only when the on-disk page JSON shape changes.
-SCHEMA_VERSION: int = 1
+# Bump only when the on-disk page JSON shape changes.
+SCHEMA_VERSION: int = 3
 
 
 _DATASET_ID_RE = re.compile(r"^[a-f0-9]{64}$")

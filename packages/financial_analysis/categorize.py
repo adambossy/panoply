@@ -38,7 +38,7 @@ from .models import CategorizedTransaction, LlmDecision, Transactions
 # ---- Tunables (private) ------------------------------------------------------
 
 _PAGE_SIZE_DEFAULT: int = 10
-_CONCURRENCY: int = 2
+_CONCURRENCY: int = 4
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
 _JITTER_PCT: float = 0.20
