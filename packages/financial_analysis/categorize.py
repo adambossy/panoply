@@ -29,7 +29,7 @@ from .categorization import (
     ensure_valid_ctv_descriptions,
     parse_and_align_category_details,
 )
-from .cache import read_dataset_from_cache, write_dataset_to_cache
+from .cache import read_page_from_cache, write_page_to_cache
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
 # DB/session and review helpers are imported lazily inside functions where
@@ -206,11 +206,14 @@ class PageResult(NamedTuple):
 def _categorize_page(
     page_index: int,
     *,
+    dataset_id: str | None,
+    page_size: int,
     exemplar_abs_indices: list[int],  # absolute indices into original_seq
     original_seq: list[Mapping[str, Any]],
     system_instructions: str,
     text_cfg: ResponseTextConfigParam,
     taxonomy: Sequence[Mapping[str, Any]],
+    source_provider: str = "amex",
 ) -> PageResult:
     # Build the page payload from exemplars only; keep page-relative idx
     count, user_content = _build_page_payload(original_seq, exemplar_abs_indices, taxonomy=taxonomy)
@@ -225,6 +228,20 @@ def _categorize_page(
             if c
         )
     )
+
+    # Try page cache first when a dataset_id is provided
+    if dataset_id is not None:
+        cached = read_page_from_cache(
+            dataset_id=dataset_id,
+            page_size=page_size,
+            page_index=page_index,
+            source_provider=source_provider,
+            taxonomy=taxonomy,
+            original_seq=original_seq,
+            exemplar_abs_indices=exemplar_abs_indices,
+        )
+        if cached is not None:
+            return PageResult(page_index=page_index, results=cached)
 
     # Instantiate the client once per page and reuse across retries.
     client = _create_client()
@@ -249,6 +266,22 @@ def _categorize_page(
             for page_idx, item in enumerate(detailed):
                 abs_index = exemplar_abs_indices[page_idx]
                 out.append((abs_index, item))
+            # Write page cache when enabled
+            if dataset_id is not None:
+                try:
+                    write_page_to_cache(
+                        dataset_id=dataset_id,
+                        page_size=page_size,
+                        page_index=page_index,
+                        source_provider=source_provider,
+                        taxonomy=taxonomy,
+                        original_seq=original_seq,
+                        exemplar_abs_indices=exemplar_abs_indices,
+                        items=out,
+                    )
+                except Exception:
+                    # Cache write failures must not fail the request path
+                    pass
             return PageResult(page_index=page_index, results=out)
         except Exception as e:  # noqa: BLE001
             dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -496,6 +529,8 @@ def categorize_expenses(
     taxonomy: Sequence[Mapping[str, Any]],
     *,
     page_size: int = _PAGE_SIZE_DEFAULT,
+    dataset_id: str | None = None,
+    source_provider: str = "amex",
 ) -> Iterable[CategorizedTransaction]:
     """Categorize expenses via the OpenAI Responses API (model: ``gpt-5``).
 
@@ -560,11 +595,14 @@ def categorize_expenses(
         page_index, indices = page_index_and_indices
         return _categorize_page(
             page_index,
+            dataset_id=dataset_id,
+            page_size=page_size,
             exemplar_abs_indices=indices,
             original_seq=original_seq,
             system_instructions=system_instructions,
             text_cfg=text_cfg,
             taxonomy=taxonomy,
+            source_provider=source_provider,
         )
 
     page_inputs: list[tuple[int, list[int]]] = [(i, pg) for i, pg in enumerate(pages)]
@@ -593,31 +631,21 @@ def get_or_categorize_all(
     *,
     source_provider: str,
     taxonomy: Sequence[Mapping[str, Any]],
+    page_size: int = _PAGE_SIZE_DEFAULT,
 ) -> list[CategorizedTransaction]:
-    """Return categorized results for the entire dataset with a single API call.
+    """Return categorized results using per-page cache in ``_categorize_page``.
 
-    This thin wrapper preserves the CLI's on‑disk cache semantics without adding
-    a second batching layer: it defers all request batching to
-    :func:`financial_analysis.categorize.categorize_expenses` (which groups into
-    pages and uses ``p_map`` for bounded parallelism).
+    The dataset identifier is used to scope the page cache directory; each page
+    is cached independently, keyed by ``page_size`` and page index.
     """
 
-    cached = read_dataset_from_cache(
-        dataset_id=dataset_id,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-        ctv_items=ctv_items,
-    )
-    if cached is not None:
-        return cached
-
-    from .categorize import categorize_expenses
-
-    results = list(categorize_expenses(ctv_items, taxonomy=taxonomy))
-    write_dataset_to_cache(
-        dataset_id=dataset_id,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-        items=results,
+    results = list(
+        categorize_expenses(
+            ctv_items,
+            taxonomy=taxonomy,
+            page_size=page_size,
+            dataset_id=dataset_id,
+            source_provider=source_provider,
+        )
     )
     return results

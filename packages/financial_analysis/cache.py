@@ -1,19 +1,19 @@
-"""Dataset-level cache and shared caching utilities.
+"""Caching utilities (page-level) and shared helpers.
 
 This module provides:
 
 - ``compute_dataset_id``: stable identifier for a run over a specific input
   dataset and model/prompt settings.
-- ``get_or_categorize_all``: dataset-wide categorization with a single call to
-  :func:`financial_analysis.categorize.categorize_expenses`, backed by a
-  single-file cache (``dataset.json``).
-- Internal helpers shared with chunk I/O (cache root, settings hash, schema).
+- Page cache helpers used by ``categorize._categorize_page`` to cache the
+  OpenAI Responses call per page (page of exemplars), rather than caching the
+  entire dataset.
+- Internal helpers shared across cache I/O (cache root, settings hash, schema).
 
 Cache layout (relative to the cache root, default: ``./.cache``):
 
-- Dataset (preferred for review path):
+- Page cache (preferred):
 
-  ``<cache_root>/<dataset_id>/dataset.json``
+  ``<cache_root>/<dataset_id>/pages_ps<page_size>/<page_index>.json``
 
 Atomicity: writes target ``.tmp`` first and then ``os.replace`` into place.
 """
@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 from . import prompting
-from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
 
 # Single schema version shared across cache files
@@ -121,26 +120,44 @@ def compute_dataset_id(
 # ----------------------------------------------------------------------------
 
 
-def _dataset_path(dataset_id: str) -> Path:
-    root = _get_cache_root() / dataset_id
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "dataset.json"
+def _pages_dir(dataset_id: str, *, page_size: int) -> Path:
+    """Return the directory that holds per-page cache files for a dataset.
 
-
-def read_dataset_from_cache(
-    *,
-    dataset_id: str,
-    source_provider: str,
-    taxonomy: Sequence[Mapping[str, object]],
-    ctv_items: list[Mapping[str, Any]],
-) -> list[CategorizedTransaction] | None:
-    """Return cached dataset results when present and valid; otherwise ``None``.
-
-    Validates schema version, settings hash, item count, and per‑item
-    fingerprints to ensure the cache matches the current inputs.
+    The directory name encodes the page size so caches remain valid when the
+    paging configuration changes.
     """
 
-    path = _dataset_path(dataset_id)
+    root = _get_cache_root() / dataset_id / f"pages_ps{page_size}"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _page_path(dataset_id: str, *, page_size: int, page_index: int) -> Path:
+    d = _pages_dir(dataset_id, page_size=page_size)
+    # zero-pad for stable lexicographic ordering
+    fname = f"{page_index:05d}.json"
+    return d / fname
+
+
+def read_page_from_cache(
+    *,
+    dataset_id: str,
+    page_size: int,
+    page_index: int,
+    source_provider: str,
+    taxonomy: Sequence[Mapping[str, object]],
+    original_seq: list[Mapping[str, Any]],
+    exemplar_abs_indices: list[int],
+) -> list[tuple[int, dict[str, Any]]] | None:
+    """Return cached page results when present and valid; otherwise ``None``.
+
+    Validation checks:
+    - schema version and dataset/page identity
+    - settings hash (model/prompt/taxonomy)
+    - exemplar count and per‑exemplar fingerprint alignment
+    """
+
+    path = _page_path(dataset_id, page_size=page_size, page_index=page_index)
     if not path.exists():
         return None
     try:
@@ -149,105 +166,93 @@ def read_dataset_from_cache(
             not isinstance(raw, dict)
             or raw.get("schema_version") != SCHEMA_VERSION
             or raw.get("dataset_id") != dataset_id
-            or raw.get("count") != len(ctv_items)
+            or raw.get("page_size") != page_size
+            or raw.get("page_index") != page_index
             or raw.get("settings_hash") != _settings_hash(taxonomy)
         ):
             return None
-        items = raw.get("items")
-        if not isinstance(items, list) or len(items) != len(ctv_items):
+
+        ex = raw.get("exemplars")
+        if not isinstance(ex, list) or len(ex) != len(exemplar_abs_indices):
             return None
 
-        out: list[CategorizedTransaction] = []
-        for i, ent in enumerate(items):
+        # Validate each exemplar's absolute index and fingerprint
+        for j, ent in enumerate(ex):
             if not isinstance(ent, dict):
                 return None
-            fp = ent.get("fp")
-            cat = ent.get("category")
-            if not isinstance(fp, str) or not isinstance(cat, str):
+            abs_idx_v = ent.get("abs_index")
+            fp_v = ent.get("fp")
+            if not isinstance(abs_idx_v, int) or not isinstance(fp_v, str):
                 return None
-            # Verify fingerprint alignment
-            tx = ctv_items[i]
-            fp_now = compute_fingerprint(source_provider=source_provider, tx=tx)
-            if fp_now != fp:
+            if abs_idx_v != exemplar_abs_indices[j]:
+                return None
+            tx = original_seq[abs_idx_v]
+            if compute_fingerprint(source_provider=source_provider, tx=tx) != fp_v:
                 return None
 
-            details = ent.get("llm", {}) or {}
-            # Required fields
-            rationale_v = details.get("rationale")
-            score_v = details.get("score")
-            if not isinstance(rationale_v, str):
+        items = raw.get("items")
+        if not isinstance(items, list) or len(items) != len(exemplar_abs_indices):
+            return None
+
+        out: list[tuple[int, dict[str, Any]]] = []
+        for ent in items:
+            if not isinstance(ent, dict):
                 return None
-            # NOTE: isinstance() requires a tuple of types; avoid PEP 604 here
-            if not isinstance(score_v, int | float):
+            abs_index = ent.get("abs_index")
+            det = ent.get("details")
+            if not isinstance(abs_index, int) or not isinstance(det, dict):
                 return None
-            # Optional revision fields
-            revised_category_v = details.get("revised_category")
-            if revised_category_v is not None and not isinstance(revised_category_v, str):
+            # Light sanity of required detail fields (types only)
+            cat = det.get("category")
+            rationale_v = det.get("rationale")
+            score_v = det.get("score")
+            if not isinstance(cat, str) or not isinstance(rationale_v, str):
                 return None
-            revised_rationale_v = details.get("revised_rationale")
-            if revised_rationale_v is not None and not isinstance(revised_rationale_v, str):
+            if not isinstance(score_v, (int, float)):  # noqa: UP038 - isinstance() requires tuple
                 return None
-            revised_score_v = details.get("revised_score")
-            if revised_score_v is not None and not isinstance(revised_score_v, int | float):
-                return None
-            # Normalize citations to an immutable tuple[str, ...]
-            citations_raw = details.get("citations", []) or []
-            if not isinstance(citations_raw, list) or not all(
-                isinstance(c, str) for c in citations_raw
-            ):
-                return None
-            citations_t = tuple(citations_raw)
-            out.append(
-                CategorizedTransaction(
-                    transaction=tx,
-                    category=cat,
-                    rationale=rationale_v,
-                    score=float(score_v),
-                    revised_category=revised_category_v,
-                    revised_rationale=revised_rationale_v,
-                    revised_score=(float(revised_score_v) if revised_score_v is not None else None),
-                    citations=citations_t,
-                )
-            )
+            out.append((abs_index, det))
         return out
     except Exception:
         return None
 
 
-def write_dataset_to_cache(
+def write_page_to_cache(
     *,
     dataset_id: str,
+    page_size: int,
+    page_index: int,
     source_provider: str,
     taxonomy: Sequence[Mapping[str, object]],
-    items: list[CategorizedTransaction],
+    original_seq: list[Mapping[str, Any]],
+    exemplar_abs_indices: list[int],
+    items: list[tuple[int, dict[str, Any]]],
 ) -> None:
-    path = _dataset_path(dataset_id)
+    path = _page_path(dataset_id, page_size=page_size, page_index=page_index)
     tmp = path.with_suffix(path.suffix + ".tmp")
 
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "dataset_id": dataset_id,
-        "count": len(items),
+        "page_size": page_size,
+        "page_index": page_index,
         "settings_hash": _settings_hash(taxonomy),
-        "items": [],
+        # Exemplars section supports alignment validation on read
+        "exemplars": [
+            {
+                "abs_index": abs_i,
+                "fp": compute_fingerprint(source_provider=source_provider, tx=original_seq[abs_i]),
+            }
+            for abs_i in exemplar_abs_indices
+        ],
+        # Items: one per exemplar, holding parsed details
+        "items": [
+            {
+                "abs_index": abs_i,
+                "details": det,
+            }
+            for (abs_i, det) in items
+        ],
     }
-
-    items_out: list[dict[str, Any]] = []
-    for item in items:
-        entry: dict[str, Any] = {
-            "fp": compute_fingerprint(source_provider=source_provider, tx=item.transaction),
-            "category": item.category,
-            "llm": {
-                "rationale": item.rationale,
-                "score": item.score,
-                "revised_category": item.revised_category,
-                "revised_rationale": item.revised_rationale,
-                "revised_score": item.revised_score,
-                "citations": list(item.citations or []),
-            },
-        }
-        items_out.append(entry)
-    payload["items"] = items_out
 
     # Write atomically, cleaning up the temp file on failure
     import contextlib
@@ -262,3 +267,10 @@ def write_dataset_to_cache(
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
         raise
+
+
+# Back-compat note: dataset-level helpers were used in an earlier iteration of
+# this PR. We keep the identifier helper and migrate caching to page files. The
+# previous dataset-wide read/write functions have been removed from the public
+# API to avoid encouraging whole-dataset caching.
+
