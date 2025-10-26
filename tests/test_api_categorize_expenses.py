@@ -509,8 +509,13 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
     sizes = [len(_extract_ctv_from_user_content(c["input"])) for c in calls]
     # Sanity: all pages together must cover the entire input
     assert sum(sizes) == n
-    # Calls may complete out of order under concurrency; verify the multiset of sizes.
-    assert sorted(sizes) == [20, 50, 50]
+    # Calls may complete out of order under concurrency; verify the multiset of sizes
+    # matches what we expect for the given n and page_size.
+    expected_sizes = [50] * (n // 50)
+    remainder = n % 50
+    if remainder:
+        expected_sizes.append(remainder)
+    assert sorted(sizes) == sorted(expected_sizes)
 
 
 def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
