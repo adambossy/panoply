@@ -12,72 +12,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated, Any
-from collections.abc import Mapping, Sequence
 
 import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
 
-from .categories import load_taxonomy_from_db
-from .categorize import prefill_unanimous_groups_from_db
-from .logging_setup import configure_logging
-
-
-# ---- Small module‑level helpers used by CLI commands -------------------------
-
-
-def _resolve_max_workers(n_chunks: int) -> int:
-    """Resolve a conservative worker count for chunk categorization.
-
-    Honors the optional ``FA_CATEGORY_MAX_WORKERS`` env var, caps to ``n_chunks``
-    and to 32 to avoid oversubscription/rate limits, and ensures a minimum of 1.
-    """
-
-    import os  # defer import to keep module import surface minimal
-
-    _env_workers = os.getenv("FA_CATEGORY_MAX_WORKERS")
-    try:
-        max_workers = int(_env_workers) if _env_workers else None
-    except Exception:
-        max_workers = None
-
-    if max_workers is not None and max_workers > 0:
-        return max(1, min(max_workers, n_chunks, 32))
-    # Default: modest parallelism to be gentle on API rate limits
-    return max(1, min(8, n_chunks))
-
-
-def _compute_one(
-    idx: int,
-    *,
-    dataset_id: str,
-    ctv_items: list,
-    source_provider: str,
-    chunk_size: int,
-    taxonomy: Sequence[Mapping[str, Any]],
-) -> tuple[int, list, float]:
-    """Compute a single categorization chunk and return timing info.
-
-    Returns a tuple ``(idx, items, seconds)`` for easy assembly and logging.
-    """
-
-    import time
-
-    # Local import to keep CLI startup fast and avoid global side effects
-    from .batching import get_or_compute_chunk
-
-    t0_local = time.perf_counter()
-    items = list(
-        get_or_compute_chunk(
-            dataset_id,
-            idx,
-            ctv_items,
-            source_provider=source_provider,
-            chunk_size=chunk_size,
-            taxonomy=taxonomy,
-        )
-    )
-    return idx, items, time.perf_counter() - t0_local
+from .categories import (
+    load_taxonomy_from_db,
+)
+from .categorize import categorize_expenses, prefill_unanimous_groups_from_db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,7 +87,6 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     import sys
 
     # Local imports to keep CLI dependency surface minimal
-    from .categorize import categorize_expenses
     from .ingest.adapters.amex_enhanced_details_csv import (
         to_ctv_enhanced_details,
     )
@@ -383,7 +325,8 @@ def cmd_review_transaction_categories(
     import csv
     import os
     import sys
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # No ThreadPoolExecutor here by design: batching is handled inside
+    # `categorize_expenses` via page_size + p_map.
 
     # Load .env here as a defensive guarantee (in addition to the Typer wrapper
     # and root callback) so env-dependent checks work even if this function is
@@ -483,72 +426,23 @@ def cmd_review_transaction_categories(
         print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
         return 1
 
-    # Categorize only unresolved items using the on-disk cache keyed to the
-    # subset (excludes already-resolved groups from dataset_id per Issue #F).
+    # Light status line so operators know we're working while pages run in parallel
+    print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
+
     try:
-        from .batching import compute_dataset_id, total_chunks_for
-    except Exception as e:
-        print(f"Error: failed to import batching helpers: {e}", file=sys.stderr)
-        return 1
-
-    # Chunk size: fixed at 250 by default; allow a dev override via env
-    _env_sz = os.getenv("FA_REVIEW_PAGE_SIZE")
-    try:
-        chunk_size = int(_env_sz) if _env_sz else 10
-        if chunk_size <= 0:
-            raise ValueError
-    except Exception:
-        chunk_size = 10
-
-    dataset_id = compute_dataset_id(
-        unresolved_ctv,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-    )
-    n_chunks = total_chunks_for(len(unresolved_ctv), chunk_size=chunk_size)
-
-    print()
-    print(f"Waiting for LLM ({n_chunks} chunks)…")
-
-    # Compute all chunks for the unresolved subset
-    all_unresolved_suggestions: list = []
-    try:
-        max_workers = _resolve_max_workers(n_chunks)
-        results_by_idx: dict[int, list] = {}
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fa-chunk") as ex:
-            fut_to_idx = {}
-            for k in range(n_chunks):
-                fut = ex.submit(
-                    _compute_one,
-                    k,
-                    dataset_id=dataset_id,
-                    ctv_items=unresolved_ctv,
-                    source_provider=source_provider,
-                    chunk_size=chunk_size,
-                    taxonomy=taxonomy,
-                )
-                fut_to_idx[fut] = k
-
-            for fut in as_completed(fut_to_idx):
-                try:
-                    idx, items_k, dt = fut.result()
-                except Exception as e:
-                    failed_idx = fut_to_idx.get(fut, -1)
-                    batch_no = failed_idx + 1 if failed_idx >= 0 else 0
-                    msg = f"Error: categorization failed on batch {batch_no}/{n_chunks}: {e}"
-                    print(msg, file=sys.stderr)
-                    return 1
-                results_by_idx[idx] = items_k
-                print(f"Batch {idx + 1}/{n_chunks} finished in {dt:.1f}s")
-
-        for k in range(n_chunks):
-            all_unresolved_suggestions.extend(results_by_idx[k])
+        # Categorize only unresolved items using dataset-level cache. This defers
+        # all batching to `categorize_expenses` (pages of 10 via p_map).
+        all_unresolved_suggestions = categorize_expenses(
+            transactions=unresolved_ctv,
+            taxonomy=taxonomy,
+            source_provider=source_provider,
+        )
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
         return 1
 
-    # Sanity check: LLM results must match unresolved item count
-    if len(all_unresolved_suggestions) != len(unresolved_indices):
+    # Sanity check: results must align with unresolved inputs
+    if len(all_unresolved_suggestions) != len(unresolved_ctv):
         print(
             "Error: internal alignment error (unresolved results size mismatch)",
             file=sys.stderr,
@@ -613,7 +507,6 @@ def categorize_expenses_cmd(
     import os
     import sys
 
-    from .api import categorize_expenses
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 
@@ -779,43 +672,6 @@ CSV_PATH_OPTION: OptionInfo = typer.Option(
     exists=False,  # allow non-existent here; the handler will report nice errors
     readable=True,
 )
-
-
-@app.callback(invoke_without_command=True)
-def _root(
-    ctx: typer.Context,
-    *,
-    persist: bool = typer.Option(
-        False, help="Persist transactions and category updates to the database."
-    ),
-    database_url: str | None = typer.Option(
-        None, help="Override DATABASE_URL (falls back to env var)."
-    ),
-    source_provider: str = typer.Option(
-        "amex",
-        help="Source provider identifier for persistence (e.g., amex, chase, venmo).",
-    ),
-    source_account: str | None = typer.Option(
-        None, help="Optional source account identifier for persistence."
-    ),
-) -> None:
-    """Root command.
-
-    Loads ``.env`` from the current working directory (without overriding any
-    already-set environment variables) and delegates to
-    :func:`cmd_categorize_expenses` when no subcommand is invoked.
-    """
-
-    # Load environment from .env in CWD (override=False to keep existing env)
-    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
-
-    # Central logging setup so child loggers inherit configuration
-    configure_logging()
-
-    if ctx.invoked_subcommand is None:
-        # No subcommand provided - show help
-        typer.echo("No subcommand provided. Use --help to see available commands.")
-        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script
