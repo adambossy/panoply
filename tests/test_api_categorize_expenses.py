@@ -502,13 +502,13 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
     stub = _PagedOpenAIStub(calls)
     monkeypatch.setattr(categorize_mod, "OpenAI", lambda: stub)
 
-    # Override to a smaller page size; expect 3 calls (50, 50, 20)
+    # Override to a smaller page size; expect 3 calls with two full pages and one tail
     out = list(_categorize_expenses(txs, page_size=50, taxonomy=TEST_TAXONOMY))
     assert len(out) == n
     assert len(calls) == 3
     sizes = [len(_extract_ctv_from_user_content(c["input"])) for c in calls]
-    assert sizes[:2] == [50, 50]
-    assert sizes[2] == 20
+    # Calls may complete out of order under concurrency; verify the multiset of sizes.
+    assert sorted(sizes) == [20, 50, 50]
 
 
 def test_bounded_concurrency_does_not_exceed_4(monkeypatch: pytest.MonkeyPatch):
