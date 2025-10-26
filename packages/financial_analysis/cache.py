@@ -33,8 +33,7 @@ from .models import LlmDecision, PageCacheFile, PageExemplar, PageItem
 from .persistence import compute_fingerprint
 
 # Page-cache schema version (independent from any other cache schema versions).
-# Start at 1 per owner decision in issue #107; bump only when the on-disk page
-# JSON shape changes.
+# Start at 1 per owner and bump only when the on-disk page JSON shape changes.
 SCHEMA_VERSION: int = 1
 
 
