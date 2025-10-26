@@ -442,6 +442,9 @@ def cmd_review_transaction_categories(
         taxonomy=taxonomy,
     )
 
+    # Light status line so operators know we're working while pages run in parallel
+    print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
+
     try:
         all_unresolved_suggestions = list(
             get_or_compute_all(
@@ -453,6 +456,14 @@ def cmd_review_transaction_categories(
         )
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
+        return 1
+
+    # Sanity check: results must align with unresolved inputs
+    if len(all_unresolved_suggestions) != len(unresolved_ctv):
+        print(
+            "Error: internal alignment error (unresolved results size mismatch)",
+            file=sys.stderr,
+        )
         return 1
 
     # Begin review for unresolved groups only (pass only the unresolved subset

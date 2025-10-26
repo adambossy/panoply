@@ -147,7 +147,7 @@ def _dataset_path(dataset_id: str) -> Path:
 def _read_dataset_from_cache(
     *,
     dataset_id: str,
-    provider: str,
+    source_provider: str,
     taxonomy: Sequence[Mapping[str, object]],
     ctv_items: list[Mapping[str, Any]],
 ) -> list[CategorizedTransaction] | None:
@@ -184,23 +184,45 @@ def _read_dataset_from_cache(
                 return None
             # Verify fingerprint alignment
             tx = ctv_items[i]
-            fp_now = compute_fingerprint(source_provider=provider, tx=tx)
+            fp_now = compute_fingerprint(source_provider=source_provider, tx=tx)
             if fp_now != fp:
                 return None
 
             details = ent.get("llm", {}) or {}
-            # Normalize citations to an immutable tuple for our model
-            citations = tuple(details.get("citations", []) or [])
+            # Required fields
+            rationale_v = details.get("rationale")
+            score_v = details.get("score")
+            if not isinstance(rationale_v, str):
+                return None
+            if not isinstance(score_v, (int | float)):
+                return None
+            # Optional revision fields
+            revised_category_v = details.get("revised_category")
+            if revised_category_v is not None and not isinstance(revised_category_v, str):
+                return None
+            revised_rationale_v = details.get("revised_rationale")
+            if revised_rationale_v is not None and not isinstance(revised_rationale_v, str):
+                return None
+            revised_score_v = details.get("revised_score")
+            if revised_score_v is not None and not isinstance(revised_score_v, (int | float)):
+                return None
+            # Normalize citations to an immutable tuple[str, ...]
+            citations_raw = details.get("citations", []) or []
+            if not isinstance(citations_raw, list) or not all(
+                isinstance(c, str) for c in citations_raw
+            ):
+                return None
+            citations_t = tuple(citations_raw)
             out.append(
                 CategorizedTransaction(
                     transaction=tx,
                     category=cat,
-                    rationale=details.get("rationale"),
-                    score=details.get("score"),
-                    revised_category=details.get("revised_category"),
-                    revised_rationale=details.get("revised_rationale"),
-                    revised_score=details.get("revised_score"),
-                    citations=citations,
+                    rationale=rationale_v,
+                    score=float(score_v),
+                    revised_category=revised_category_v,
+                    revised_rationale=revised_rationale_v,
+                    revised_score=(float(revised_score_v) if revised_score_v is not None else None),
+                    citations=citations_t,
                 )
             )
         return out
@@ -211,7 +233,7 @@ def _read_dataset_from_cache(
 def _write_dataset_to_cache(
     *,
     dataset_id: str,
-    provider: str,
+    source_provider: str,
     taxonomy: Sequence[Mapping[str, object]],
     items: list[CategorizedTransaction],
 ) -> None:
@@ -229,7 +251,7 @@ def _write_dataset_to_cache(
     items_out: list[dict[str, Any]] = []
     for item in items:
         entry: dict[str, Any] = {
-            "fp": compute_fingerprint(source_provider=provider, tx=item.transaction),
+            "fp": compute_fingerprint(source_provider=source_provider, tx=item.transaction),
             "category": item.category,
             "llm": {
                 "rationale": item.rationale,
@@ -243,8 +265,19 @@ def _write_dataset_to_cache(
         items_out.append(entry)
     payload["items"] = items_out
 
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    # Write atomically, cleaning up the temp file on failure
+    import contextlib
+
+    try:
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
 
 
 def get_or_compute_all(
@@ -264,7 +297,7 @@ def get_or_compute_all(
 
     cached = _read_dataset_from_cache(
         dataset_id=dataset_id,
-        provider=source_provider,
+        source_provider=source_provider,
         taxonomy=taxonomy,
         ctv_items=ctv_items,
     )
@@ -276,7 +309,7 @@ def get_or_compute_all(
     results = list(categorize_expenses(ctv_items, taxonomy=taxonomy))
     _write_dataset_to_cache(
         dataset_id=dataset_id,
-        provider=source_provider,
+        source_provider=source_provider,
         taxonomy=taxonomy,
         items=results,
     )
