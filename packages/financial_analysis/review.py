@@ -813,11 +813,6 @@ def review_transaction_categories(
         if not allowed:
             raise RuntimeError("No categories present in fa_categories; cannot proceed")
 
-        # Note: DB-first duplicate prefill now happens in the CLI prior to
-        # invoking this review flow. The interactive review operates on the
-        # unresolved subset only. We no longer auto-apply from DB here to avoid
-        # double application when the CLI has already persisted those rows.
-
         # Compute remaining counts once per group root and consider only groups
         # with remaining items.
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
