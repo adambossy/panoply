@@ -580,7 +580,9 @@ def categorize_expenses(
         pages.append(exemplars[base:end])
 
     dataset_id = compute_dataset_id(
-        ctv_items=transactions,
+        # Use the already-materialized sequence; the original iterable may be
+        # exhausted at this point, which would yield an incorrect key.
+        ctv_items=original_seq,
         source_provider=source_provider,
         taxonomy=taxonomy,
     )

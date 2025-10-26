@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from . import prompting
+from .logging_setup import get_logger
 from .persistence import compute_fingerprint
 
 # Single schema version shared across cache files
@@ -36,6 +37,9 @@ SCHEMA_VERSION: int = 2
 
 
 _DATASET_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+_logger = get_logger("financial_analysis.cache")
 
 
 def _validate_dataset_id(dataset_id: str) -> str:
@@ -180,7 +184,21 @@ def read_page_from_cache(
     if not path.exists():
         return None
 
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _logger.debug(
+            (
+                "page_cache:read_failed; falling back to compute "
+                "dataset_id=%s page_index=%d page_size=%d path=%s"
+            ),
+            dataset_id,
+            page_index,
+            page_size,
+            os.fspath(path),
+            exc_info=True,
+        )
+        return None
     if (
         not isinstance(raw, dict)
         or raw.get("schema_version") != SCHEMA_VERSION
