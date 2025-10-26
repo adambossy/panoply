@@ -17,11 +17,10 @@ import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
 
+from .cache import compute_dataset_id
 from .categories import load_taxonomy_from_db
-from .categorize import prefill_unanimous_groups_from_db
+from .categorize import get_or_categorize_all, prefill_unanimous_groups_from_db
 from .logging_setup import configure_logging
-
-
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -428,14 +427,6 @@ def cmd_review_transaction_categories(
         print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
         return 1
 
-    # Categorize only unresolved items using dataset-level cache. This defers
-    # all batching to `categorize_expenses` (pages of 10 via p_map).
-    try:
-        from .cache import compute_dataset_id, get_or_compute_all
-    except Exception as e:
-        print(f"Error: failed to import cache helpers: {e}", file=sys.stderr)
-        return 1
-
     dataset_id = compute_dataset_id(
         unresolved_ctv,
         source_provider=source_provider,
@@ -446,7 +437,9 @@ def cmd_review_transaction_categories(
     print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
 
     try:
-        all_unresolved_suggestions = get_or_compute_all(
+        # Categorize only unresolved items using dataset-level cache. This defers
+        # all batching to `categorize_expenses` (pages of 10 via p_map).
+        all_unresolved_suggestions = get_or_categorize_all(
             dataset_id,
             unresolved_ctv,
             source_provider=source_provider,

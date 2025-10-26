@@ -23,11 +23,13 @@ from openai import OpenAI
 from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
+
 from . import prompting
 from .categorization import (
     ensure_valid_ctv_descriptions,
     parse_and_align_category_details,
 )
+from .cache import read_dataset_from_cache, write_dataset_to_cache
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
 # DB/session and review helpers are imported lazily inside functions where
@@ -582,4 +584,40 @@ def categorize_expenses(
         group_details_by_exemplar=group_details_by_exemplar,
     )
 
+    return results
+
+
+def get_or_categorize_all(
+    dataset_id: str,
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    source_provider: str,
+    taxonomy: Sequence[Mapping[str, Any]],
+) -> list[CategorizedTransaction]:
+    """Return categorized results for the entire dataset with a single API call.
+
+    This thin wrapper preserves the CLI's on‑disk cache semantics without adding
+    a second batching layer: it defers all request batching to
+    :func:`financial_analysis.categorize.categorize_expenses` (which groups into
+    pages and uses ``p_map`` for bounded parallelism).
+    """
+
+    cached = read_dataset_from_cache(
+        dataset_id=dataset_id,
+        source_provider=source_provider,
+        taxonomy=taxonomy,
+        ctv_items=ctv_items,
+    )
+    if cached is not None:
+        return cached
+
+    from .categorize import categorize_expenses
+
+    results = list(categorize_expenses(ctv_items, taxonomy=taxonomy))
+    write_dataset_to_cache(
+        dataset_id=dataset_id,
+        source_provider=source_provider,
+        taxonomy=taxonomy,
+        items=results,
+    )
     return results

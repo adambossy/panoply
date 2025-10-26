@@ -4,7 +4,7 @@ This module provides:
 
 - ``compute_dataset_id``: stable identifier for a run over a specific input
   dataset and model/prompt settings.
-- ``get_or_compute_all``: dataset-wide categorization with a single call to
+- ``get_or_categorize_all``: dataset-wide categorization with a single call to
   :func:`financial_analysis.categorize.categorize_expenses`, backed by a
   single-file cache (``dataset.json``).
 - Internal helpers shared with chunk I/O (cache root, settings hash, schema).
@@ -127,7 +127,7 @@ def _dataset_path(dataset_id: str) -> Path:
     return root / "dataset.json"
 
 
-def _read_dataset_from_cache(
+def read_dataset_from_cache(
     *,
     dataset_id: str,
     source_provider: str,
@@ -214,7 +214,7 @@ def _read_dataset_from_cache(
         return None
 
 
-def _write_dataset_to_cache(
+def write_dataset_to_cache(
     *,
     dataset_id: str,
     source_provider: str,
@@ -262,39 +262,3 @@ def _write_dataset_to_cache(
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
         raise
-
-
-def get_or_compute_all(
-    dataset_id: str,
-    ctv_items: list[Mapping[str, Any]],
-    *,
-    source_provider: str,
-    taxonomy: Sequence[Mapping[str, Any]],
-) -> list[CategorizedTransaction]:
-    """Return categorized results for the entire dataset with a single API call.
-
-    This thin wrapper preserves the CLI's on‑disk cache semantics without adding
-    a second batching layer: it defers all request batching to
-    :func:`financial_analysis.categorize.categorize_expenses` (which groups into
-    pages and uses ``p_map`` for bounded parallelism).
-    """
-
-    cached = _read_dataset_from_cache(
-        dataset_id=dataset_id,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-        ctv_items=ctv_items,
-    )
-    if cached is not None:
-        return cached
-
-    from .categorize import categorize_expenses
-
-    results = list(categorize_expenses(ctv_items, taxonomy=taxonomy))
-    _write_dataset_to_cache(
-        dataset_id=dataset_id,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-        items=results,
-    )
-    return results
