@@ -179,67 +179,65 @@ def read_page_from_cache(
     path = _page_path(dataset_id, page_size=page_size, page_index=page_index)
     if not path.exists():
         return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            not isinstance(raw, dict)
-            or raw.get("schema_version") != SCHEMA_VERSION
-            or raw.get("dataset_id") != dataset_id
-            or raw.get("page_size") != page_size
-            or raw.get("page_index") != page_index
-            or raw.get("settings_hash") != _settings_hash(taxonomy)
-        ):
-            return None
 
-        ex = raw.get("exemplars")
-        if not isinstance(ex, list) or len(ex) != len(exemplar_abs_indices):
-            return None
-
-        # Validate each exemplar's absolute index and fingerprint
-        for j, ent in enumerate(ex):
-            if not isinstance(ent, dict):
-                return None
-            abs_idx_v = ent.get("abs_index")
-            fp_v = ent.get("fp")
-            if not isinstance(abs_idx_v, int) or not isinstance(fp_v, str):
-                return None
-            if abs_idx_v != exemplar_abs_indices[j]:
-                return None
-            tx = original_seq[abs_idx_v]
-            if compute_fingerprint(source_provider=source_provider, tx=tx) != fp_v:
-                return None
-
-        items = raw.get("items")
-        if not isinstance(items, list) or len(items) != len(exemplar_abs_indices):
-            return None
-
-        exemplar_set = set(exemplar_abs_indices)
-        idx_to_details: dict[int, dict[str, Any]] = {}
-        for ent in items:
-            if not isinstance(ent, dict):
-                return None
-            abs_index = ent.get("abs_index")
-            det = ent.get("details")
-            if not isinstance(abs_index, int) or not isinstance(det, dict):
-                return None
-            # Ensure 1:1 alignment and uniqueness
-            if abs_index not in exemplar_set or abs_index in idx_to_details:
-                return None
-            # Light sanity of required detail fields (types only)
-            cat = det.get("category")
-            rationale_v = det.get("rationale")
-            score_v = det.get("score")
-            if not isinstance(cat, str) or not isinstance(rationale_v, str):
-                return None
-            if not isinstance(score_v, (int, float)):  # noqa: UP038 - isinstance() requires tuple
-                return None
-            idx_to_details[abs_index] = det
-
-        # Emit in exemplar order for deterministic downstream behavior
-        out = [(abs_i, idx_to_details[abs_i]) for abs_i in exemplar_abs_indices]
-        return out
-    except Exception:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(raw, dict)
+        or raw.get("schema_version") != SCHEMA_VERSION
+        or raw.get("dataset_id") != dataset_id
+        or raw.get("page_size") != page_size
+        or raw.get("page_index") != page_index
+        or raw.get("settings_hash") != _settings_hash(taxonomy)
+    ):
         return None
+
+    ex = raw.get("exemplars")
+    if not isinstance(ex, list) or len(ex) != len(exemplar_abs_indices):
+        return None
+
+    # Validate each exemplar's absolute index and fingerprint
+    for j, ent in enumerate(ex):
+        if not isinstance(ent, dict):
+            return None
+        abs_idx_v = ent.get("abs_index")
+        fp_v = ent.get("fp")
+        if not isinstance(abs_idx_v, int) or not isinstance(fp_v, str):
+            return None
+        if abs_idx_v != exemplar_abs_indices[j]:
+            return None
+        tx = original_seq[abs_idx_v]
+        if compute_fingerprint(source_provider=source_provider, tx=tx) != fp_v:
+            return None
+
+    items = raw.get("items")
+    if not isinstance(items, list) or len(items) != len(exemplar_abs_indices):
+        return None
+
+    exemplar_set = set(exemplar_abs_indices)
+    idx_to_details: dict[int, dict[str, Any]] = {}
+    for ent in items:
+        if not isinstance(ent, dict):
+            return None
+        abs_index = ent.get("abs_index")
+        det = ent.get("details")
+        if not isinstance(abs_index, int) or not isinstance(det, dict):
+            return None
+        # Ensure 1:1 alignment and uniqueness
+        if abs_index not in exemplar_set or abs_index in idx_to_details:
+            return None
+        # Light sanity of required detail fields (types only)
+        cat = det.get("category")
+        rationale_v = det.get("rationale")
+        score_v = det.get("score")
+        if not isinstance(cat, str) or not isinstance(rationale_v, str):
+            return None
+        if not isinstance(score_v, (int, float)):  # noqa: UP038 - isinstance() requires tuple
+            return None
+        idx_to_details[abs_index] = det
+
+    # Emit in exemplar order for deterministic downstream behavior
+    out = [(abs_i, idx_to_details[abs_i]) for abs_i in exemplar_abs_indices]
+    return out
 
 
 def write_page_to_cache(
