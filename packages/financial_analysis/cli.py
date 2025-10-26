@@ -674,43 +674,6 @@ CSV_PATH_OPTION: OptionInfo = typer.Option(
 )
 
 
-@app.callback(invoke_without_command=True)
-def _root(
-    ctx: typer.Context,
-    *,
-    persist: bool = typer.Option(
-        False, help="Persist transactions and category updates to the database."
-    ),
-    database_url: str | None = typer.Option(
-        None, help="Override DATABASE_URL (falls back to env var)."
-    ),
-    source_provider: str = typer.Option(
-        "amex",
-        help="Source provider identifier for persistence (e.g., amex, chase, venmo).",
-    ),
-    source_account: str | None = typer.Option(
-        None, help="Optional source account identifier for persistence."
-    ),
-) -> None:
-    """Root command.
-
-    Loads ``.env`` from the current working directory (without overriding any
-    already-set environment variables) and delegates to
-    :func:`cmd_categorize_expenses` when no subcommand is invoked.
-    """
-
-    # Load environment from .env in CWD (override=False to keep existing env)
-    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
-
-    # Central logging setup so child loggers inherit configuration
-    configure_logging()
-
-    if ctx.invoked_subcommand is None:
-        # No subcommand provided - show help
-        typer.echo("No subcommand provided. Use --help to see available commands.")
-        raise typer.Exit(1)
-
-
 if __name__ == "__main__":  # pragma: no cover - exercised via uv tool script
     # Running as a module: `python -m financial_analysis.cli`
     app()
