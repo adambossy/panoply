@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,23 @@ from .persistence import compute_fingerprint
 
 # Single schema version shared across cache files
 SCHEMA_VERSION: int = 2
+
+
+_DATASET_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _validate_dataset_id(dataset_id: str) -> str:
+    """Ensure the dataset identifier is a 64-char lowercase hex string.
+
+    Prevents path traversal and misuse when callers supply an arbitrary string.
+    """
+
+    if not _DATASET_ID_RE.fullmatch(dataset_id):
+        raise ValueError(
+            "Invalid dataset_id: must be 64-char lowercase hex (sha256 hexdigest). "
+            "Use compute_dataset_id()."
+        )
+    return dataset_id
 
 
 # ----------------------------------------------------------------------------
@@ -127,6 +145,7 @@ def _pages_dir(dataset_id: str, *, page_size: int) -> Path:
     paging configuration changes.
     """
 
+    dataset_id = _validate_dataset_id(dataset_id)
     root = _get_cache_root() / dataset_id / f"pages_ps{page_size}"
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -194,13 +213,17 @@ def read_page_from_cache(
         if not isinstance(items, list) or len(items) != len(exemplar_abs_indices):
             return None
 
-        out: list[tuple[int, dict[str, Any]]] = []
+        exemplar_set = set(exemplar_abs_indices)
+        idx_to_details: dict[int, dict[str, Any]] = {}
         for ent in items:
             if not isinstance(ent, dict):
                 return None
             abs_index = ent.get("abs_index")
             det = ent.get("details")
             if not isinstance(abs_index, int) or not isinstance(det, dict):
+                return None
+            # Ensure 1:1 alignment and uniqueness
+            if abs_index not in exemplar_set or abs_index in idx_to_details:
                 return None
             # Light sanity of required detail fields (types only)
             cat = det.get("category")
@@ -210,7 +233,10 @@ def read_page_from_cache(
                 return None
             if not isinstance(score_v, (int, float)):  # noqa: UP038 - isinstance() requires tuple
                 return None
-            out.append((abs_index, det))
+            idx_to_details[abs_index] = det
+
+        # Emit in exemplar order for deterministic downstream behavior
+        out = [(abs_i, idx_to_details[abs_i]) for abs_i in exemplar_abs_indices]
         return out
     except Exception:
         return None
