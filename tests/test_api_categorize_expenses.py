@@ -507,6 +507,8 @@ def test_kw_only_page_size_override_changes_call_count(monkeypatch: pytest.Monke
     assert len(out) == n
     assert len(calls) == 3
     sizes = [len(_extract_ctv_from_user_content(c["input"])) for c in calls]
+    # Sanity: all pages together must cover the entire input
+    assert sum(sizes) == n
     # Calls may complete out of order under concurrency; verify the multiset of sizes.
     assert sorted(sizes) == [20, 50, 50]
 
