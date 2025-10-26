@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 """Expense categorization flow extracted from ``api.py``.
 
 Public API:
@@ -29,8 +30,6 @@ from .categorization import (
 )
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, Transactions
-from .persistence import compute_fingerprint
-
 # DB/session and review helpers are imported lazily inside functions where
 # needed to avoid side effects at import time and to limit dependency surface.
 
@@ -357,6 +356,7 @@ def _prefill_unanimous_groups_from_db(
         _query_group_duplicates as _review_query_group_duplicates,
         _persist_group as _review_persist_group,
     )
+    from .persistence import compute_fingerprint  # noqa: I001
 
     try:
         _exemplars, by_key, _singletons = _group_by_normalized_merchant(ctv_items)
