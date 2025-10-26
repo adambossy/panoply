@@ -31,14 +31,14 @@ from .categorization import (
 )
 from .cache import compute_dataset_id, read_page_from_cache, write_page_to_cache
 from .logging_setup import get_logger
-from .models import CategorizedTransaction, Transactions
+from .models import CategorizedTransaction, LlmDecision, Transactions
 # DB/session and review helpers are imported lazily inside functions where
 # needed to avoid side effects at import time and to limit dependency surface.
 
 # ---- Tunables (private) ------------------------------------------------------
 
 _PAGE_SIZE_DEFAULT: int = 10
-_CONCURRENCY: int = 4
+_CONCURRENCY: int = 2
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)
 _JITTER_PCT: float = 0.20
@@ -199,8 +199,8 @@ def _sleep_backoff(attempt_no: int) -> None:
 
 class PageResult(NamedTuple):
     page_index: int
-    # List of (group_root_abs_index, parsed_result_dict)
-    results: list[tuple[int, dict[str, Any]]]
+    # List of (group_root_abs_index, typed_decision)
+    results: list[tuple[int, LlmDecision]]
 
 
 def _categorize_page(
@@ -260,10 +260,10 @@ def _categorize_page(
                 decoded, num_items=count, allowed_categories=allowed
             )
             # Map page-relative results back to absolute exemplar indices
-            out: list[tuple[int, dict[str, Any]]] = []
+            out: list[tuple[int, LlmDecision]] = []
             for page_idx, item in enumerate(detailed):
                 abs_index = exemplar_abs_indices[page_idx]
-                out.append((abs_index, item))
+                out.append((abs_index, LlmDecision.model_validate(item)))
             write_page_to_cache(
                 dataset_id=dataset_id,
                 page_size=page_size,
@@ -454,7 +454,7 @@ def _fan_out_group_decisions(
     exemplars: Sequence[int],
     by_key: Mapping[str, list[int]],
     singleton_indices: Sequence[int],
-    group_details_by_exemplar: Mapping[int, Mapping[str, Any]],
+    group_details_by_exemplar: Mapping[int, LlmDecision],
 ) -> list[CategorizedTransaction]:
     """Apply group-level categorization details to all group members.
 
@@ -499,13 +499,13 @@ def _fan_out_group_decisions(
         for m in members:
             results[m] = CategorizedTransaction(
                 transaction=original_seq[m],
-                category=details["category"],
-                rationale=details["rationale"],
-                score=details["score"],
-                revised_category=details["revised_category"],
-                revised_rationale=details["revised_rationale"],
-                revised_score=details["revised_score"],
-                citations=details["citations"],
+                category=details.category,
+                rationale=details.rationale,
+                score=details.score,
+                revised_category=details.revised_category,
+                revised_rationale=details.revised_rationale,
+                revised_score=details.revised_score,
+                citations=details.citations,
             )
 
     # Validate all positions were filled exactly once
@@ -541,7 +541,7 @@ def categorize_expenses(
 
     Returns
     -------
-    Iterable[CategorizedTransaction]
+    list[CategorizedTransaction]
         One result per input item, in the same order.
 
     Notes
@@ -572,7 +572,7 @@ def categorize_expenses(
     )
 
     # Hold per-group parsed details keyed by exemplar absolute index
-    group_details_by_exemplar: dict[int, dict[str, Any]] = {}
+    group_details_by_exemplar: dict[int, LlmDecision] = {}
 
     # Build pages over exemplars
     pages: list[list[int]] = []
@@ -580,7 +580,7 @@ def categorize_expenses(
         pages.append(exemplars[base:end])
 
     dataset_id = compute_dataset_id(
-        ctv_items=transactions,
+        ctv_items=original_seq,
         source_provider=source_provider,
         taxonomy=taxonomy,
     )
