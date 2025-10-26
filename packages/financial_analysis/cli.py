@@ -17,10 +17,10 @@ import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
 
-from .cache import compute_dataset_id
-from .categories import load_taxonomy_from_db
-from .categorize import get_or_categorize_all, prefill_unanimous_groups_from_db
-from .logging_setup import configure_logging
+from .categories import (
+    load_taxonomy_from_db,
+)
+from .categorize import categorize_expenses, prefill_unanimous_groups_from_db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,7 +87,6 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     import sys
 
     # Local imports to keep CLI dependency surface minimal
-    from .categorize import categorize_expenses
     from .ingest.adapters.amex_enhanced_details_csv import (
         to_ctv_enhanced_details,
     )
@@ -427,23 +426,16 @@ def cmd_review_transaction_categories(
         print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
         return 1
 
-    dataset_id = compute_dataset_id(
-        unresolved_ctv,
-        source_provider=source_provider,
-        taxonomy=taxonomy,
-    )
-
     # Light status line so operators know we're working while pages run in parallel
     print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
 
     try:
         # Categorize only unresolved items using dataset-level cache. This defers
         # all batching to `categorize_expenses` (pages of 10 via p_map).
-        all_unresolved_suggestions = get_or_categorize_all(
-            dataset_id,
-            unresolved_ctv,
-            source_provider=source_provider,
+        all_unresolved_suggestions = categorize_expenses(
+            transactions=unresolved_ctv,
             taxonomy=taxonomy,
+            source_provider=source_provider,
         )
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
@@ -515,7 +507,6 @@ def categorize_expenses_cmd(
     import os
     import sys
 
-    from .api import categorize_expenses
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
     from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
 

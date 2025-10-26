@@ -24,7 +24,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -113,7 +113,7 @@ def _settings_hash(
 
 
 def compute_dataset_id(
-    ctv_items: list[Mapping[str, Any]],
+    ctv_items: Iterable[Mapping[str, Any]],
     *,
     source_provider: str,
     taxonomy: Sequence[Mapping[str, object]],
@@ -299,4 +299,3 @@ def write_page_to_cache(
 # this PR. We keep the identifier helper and migrate caching to page files. The
 # previous dataset-wide read/write functions have been removed from the public
 # API to avoid encouraging whole-dataset caching.
-
