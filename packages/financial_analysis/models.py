@@ -201,9 +201,7 @@ class LlmDecision(BaseModel):
 
     @field_validator("citations")
     @classmethod
-    def _normalize_citations(
-        cls, v: tuple[str, ...] | list[str] | None
-    ) -> tuple[str, ...] | None:
+    def _normalize_citations(cls, v: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | None:
         if v is None:
             return None
         items = [s.strip() for s in list(v) if isinstance(s, str) and s.strip()]
