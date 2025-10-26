@@ -329,7 +329,7 @@ def _group_by_normalized_merchant(
     return exemplars, by_key, singleton_indices
 
 
-def _prefill_unanimous_groups_from_db(
+def prefill_unanimous_groups_from_db(
     ctv_items: list[Mapping[str, Any]],
     *,
     database_url: str | None,
@@ -419,6 +419,10 @@ def _prefill_unanimous_groups_from_db(
             prefilled_groups += 1
 
     return prefilled_positions, prefilled_groups
+
+# Backwards-compat alias for in-repo callers updated in the same PR.
+# Keep briefly to avoid churn across modules during the transition.
+_prefill_unanimous_groups_from_db = prefill_unanimous_groups_from_db
 
 
 def _fan_out_group_decisions(

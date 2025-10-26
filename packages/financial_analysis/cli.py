@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from typer.models import OptionInfo
 
 from .categories import load_taxonomy_from_db
+from .categorize import prefill_unanimous_groups_from_db
 from .logging_setup import configure_logging
 
 
@@ -79,8 +80,7 @@ def _compute_one(
     return idx, items, time.perf_counter() - t0_local
 
 
-# DB-first prefill helper now lives in categorize.py for reuse
-from .categorize import _prefill_unanimous_groups_from_db  # noqa: E402
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -448,7 +448,7 @@ def cmd_review_transaction_categories(
 
     # DB-first prefill: resolve groups that have a unanimous DB category
     try:
-        prefilled_positions, prefilled_groups = _prefill_unanimous_groups_from_db(
+        prefilled_positions, prefilled_groups = prefill_unanimous_groups_from_db(
             ctv_items,
             database_url=database_url,
             source_provider=source_provider,
