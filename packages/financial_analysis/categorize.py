@@ -242,6 +242,14 @@ def _categorize_page(
         return PageResult(page_index=page_index, results=cached)
 
     # Instantiate the client once per page and reuse across retries.
+    # Visible trace that this page will be sent to the model (cache miss path).
+    # Keep a concise, structured message so downstream log processors can key on it.
+    _logger.info(
+        "categorize_expenses:page_llm page_index=%d count=%d",
+        page_index,
+        count,
+    )
+
     client = _create_client()
     attempt = 1
     while True:
