@@ -4,19 +4,26 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from db import Base
 from db.client import get_engine, session_scope
-from db.models.finance import FaCategory
-from sqlalchemy import event
+from db.models.finance import FaCategory, FaTransaction
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Integer,
+    event,
+)
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
+from sqlalchemy.schema import MetaData, Table
 
 
-def bootstrap_sqlite_db(db_file: Path) -> str:
+def bootstrap_sqlite_db(db_file: Path, *, set_default_env: bool = False) -> str:
     """Create a SQLite database file, initialize schema, and return the URL.
 
     Using a file-backed SQLite DB ensures multiple SQLAlchemy connections share
@@ -28,69 +35,29 @@ def bootstrap_sqlite_db(db_file: Path) -> str:
     db_file.parent.mkdir(parents=True, exist_ok=True)
     engine = get_engine(database_url=url)
 
-    # Define a SQLite-compatible `now()` SQL function so server_default=now() works
+    # Enforce FKs and provide a `now()` shim so server_default=now() works
     @event.listens_for(engine, "connect")
-    def _register_now(dbapi_conn, _):  # pragma: no cover - tiny bridge
+    def _on_connect(dbapi_conn, _):  # pragma: no cover - tiny bridge
         try:
-            from datetime import datetime
-
+            dbapi_conn.execute("PRAGMA foreign_keys = ON")
+            from datetime import UTC, datetime
             dbapi_conn.create_function(
-                "now", 0, lambda: datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                "now", 0, lambda: datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
             )
         except Exception:
-            # Best-effort; tests will fail loudly if this isn't working
+            # Best effort; any mismatch will surface in tests
             pass
-    Base.metadata.create_all(bind=engine)
-    # Create the partial unique index used by upserts on (provider, external_id)
-    with session_scope(database_url=url) as session:
-        # SQLite-friendly replacement for `fa_transactions.id BIGINT PRIMARY KEY` so
-        # inserts can auto-generate rowids. SQLite requires `INTEGER PRIMARY KEY`.
-        session.execute(sql_text("DROP TABLE IF EXISTS fa_transactions"))
-        session.execute(
-            sql_text(
-                """
-                CREATE TABLE fa_transactions (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  source_provider TEXT NOT NULL,
-                  source_account TEXT NULL,
-                  external_id TEXT NULL,
-                  fingerprint_sha256 CHAR(64) NOT NULL UNIQUE,
-                  raw_record JSON NOT NULL,
-                  currency_code CHAR(3) NOT NULL DEFAULT 'USD',
-                  amount NUMERIC NULL,
-                  date DATE NULL,
-                  description TEXT NULL,
-                  merchant TEXT NULL,
-                  memo TEXT NULL,
-                  display_name TEXT NULL,
-                  display_name_source TEXT NOT NULL DEFAULT 'unknown',
-                  renamed_at DATETIME NULL,
-                  verified BOOLEAN NOT NULL DEFAULT 0,
-                  category TEXT NULL,
-                  category_source TEXT NOT NULL DEFAULT 'unknown',
-                  category_confidence NUMERIC NULL,
-                  categorized_at DATETIME NULL,
-                  is_deleted BOOLEAN NOT NULL DEFAULT 0,
-                  created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                  updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                  FOREIGN KEY(category) REFERENCES fa_categories(code)
-                )
-                """
-            )
-        )
-        session.execute(
-            # SQLite supports partial indexes with a WHERE clause (>=3.8)
-            # This mirrors the Postgres migration 0001 index.
-            # nosec - test-only DDL
-            sql_text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uniq_fa_tx_provider_external_id\n"
-                "ON fa_transactions (source_provider, external_id)\n"
-                "WHERE external_id IS NOT NULL"
-            )
-        )
-        session.flush()
+
+    # Only create taxonomy tables from metadata; we'll create transactions below
+    Base.metadata.create_all(bind=engine, tables=[FaCategory.__table__])
+
+    # Build transactions table dynamically from ORM to avoid drift
+    _create_sqlite_fa_transactions(engine)
+    _assert_transactions_schema_in_sync(url)
+
     # Make it the default for any code paths that read from the environment
-    os.environ.setdefault("DATABASE_URL", url)
+    if set_default_env:
+        os.environ["DATABASE_URL"] = url
     return url
 
 
@@ -115,7 +82,7 @@ def _clear_categories(session: Session) -> None:
 def _insert_taxonomy(session: Session, data: list[dict[str, Any]]) -> None:
     # Insert parents first to satisfy FK on children
     order = 0
-    now = datetime.now(datetime.UTC)
+    now = datetime.now(UTC)
     for parent in data:
         code = str(parent.get("code") or parent.get("display_name"))
         name = str(parent.get("display_name") or code)
@@ -151,3 +118,93 @@ def _insert_taxonomy(session: Session, data: list[dict[str, Any]]) -> None:
                 )
             )
     session.flush()
+
+
+def _create_sqlite_fa_transactions(engine) -> None:
+    """Create the `fa_transactions` table in SQLite based on the ORM model.
+
+    Differences from Postgres:
+    - `id` is `INTEGER PRIMARY KEY` (rowid) instead of `BIGINT` to enable
+      implicit autoincrement behavior in SQLite.
+    - The partial unique index on `(source_provider, external_id)` is created
+      separately with a `WHERE external_id IS NOT NULL` predicate (mirrors
+      migration 0001).
+    """
+
+    meta = MetaData()
+    # Ensure the referenced table exists in the same MetaData for FK resolution
+    Table(FaCategory.__tablename__, meta, autoload_with=engine)
+
+    cols: list[Column] = []
+    for c in FaTransaction.__table__.columns:
+        # Rebuild FK relationships (Column.copy() drops FKs and is deprecated)
+        fks = []
+        if c.foreign_keys:
+            for fk in c.foreign_keys:
+                # Keep it simple; SQLite ignores deferrable semantics anyway
+                fks.append(ForeignKey(str(fk.target_fullname)))
+
+        # Translate the ID column for SQLite rowid semantics
+        if c.name == "id":
+            new_col = Column(
+                "id",
+                Integer,
+                primary_key=True,
+                autoincrement=True,
+                nullable=False,
+            )
+        else:
+            new_col = Column(
+                c.name,
+                c.type,
+                *fks,
+                primary_key=c.primary_key,
+                nullable=c.nullable,
+                unique=c.unique,
+                server_default=(c.server_default.arg if c.server_default is not None else None),
+            )
+
+        cols.append(new_col)
+
+    # Carry over table-level CHECK constraints
+    checks: list[CheckConstraint] = []
+    for cons in FaTransaction.__table__.constraints:
+        if isinstance(cons, CheckConstraint):
+            checks.append(CheckConstraint(str(cons.sqltext), name=cons.name))
+
+    tx = Table(
+        "fa_transactions",
+        meta,
+        *cols,
+        *checks,
+        sqlite_autoincrement=True,  # emit AUTOINCREMENT keyword for rowid PK
+    )
+
+    # Create table and the partial unique index used by upserts
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE IF EXISTS fa_transactions")
+        tx.create(bind=conn)
+        conn.exec_driver_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_fa_tx_provider_external_id
+            ON fa_transactions (source_provider, external_id)
+            WHERE external_id IS NOT NULL
+            """
+        )
+
+
+def _assert_transactions_schema_in_sync(database_url: str) -> None:
+    """Quick sanity check: ORM column set matches SQLite table column set.
+
+    This catches accidental divergence if the model changes and the helper is
+    not updated accordingly.
+    """
+    expected = {c.name for c in FaTransaction.__table__.columns}
+    with session_scope(database_url=database_url) as session:
+        rows = session.execute(sql_text("PRAGMA table_info('fa_transactions')")).fetchall()
+        got = {row[1] for row in rows}  # (cid, name, type, notnull, dflt_value, pk)
+    missing = expected - got
+    extra = got - expected
+    assert not missing and not extra, (
+        f"fa_transactions schema drift: missing={missing or '∅'}, extra={extra or '∅'}"
+    )
