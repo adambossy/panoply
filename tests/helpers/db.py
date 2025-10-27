@@ -57,7 +57,8 @@ def bootstrap_sqlite_db(db_file: Path, *, set_default_env: bool = False) -> str:
 
     # Make it the default for any code paths that read from the environment
     if set_default_env:
-        os.environ["DATABASE_URL"] = url
+        # Preserve prior non-overriding semantics
+        os.environ.setdefault("DATABASE_URL", url)
     return url
 
 
@@ -170,7 +171,7 @@ def _create_sqlite_fa_transactions(engine) -> None:
     checks: list[CheckConstraint] = []
     for cons in FaTransaction.__table__.constraints:
         if isinstance(cons, CheckConstraint):
-            checks.append(CheckConstraint(str(cons.sqltext), name=cons.name))
+            checks.append(CheckConstraint(cons.sqltext, name=cons.name))
 
     tx = Table(
         "fa_transactions",
