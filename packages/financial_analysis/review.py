@@ -12,17 +12,17 @@ import builtins
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from db.client import session_scope
-from db.models.finance import FaCategory, FaTransaction
-from sqlalchemy import distinct, func, or_, select, update
+from db.models.finance import FaCategory
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .categories import createCategory, list_top_level_categories
+from .duplicates import PreparedItem, persist_group, query_group_duplicates
 from .models import CategorizedTransaction
-from .persistence import compute_fingerprint, upsert_transactions
+from .persistence import compute_fingerprint
 from .term_ui import (
     TOP_LEVEL_SENTINEL,
     CreateCategoryRequest,
@@ -39,17 +39,6 @@ from .term_ui import (
 # ----------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedItem:
-    """Prepared view of an input row with identifiers for grouping/DB lookups."""
-
-    pos: int
-    tx: Mapping[str, Any]
-    suggested: str
-    external_id: str | None
-    fingerprint: str
-
-
 def _norm_id(v: Any) -> str | None:
     if v is None:
         return None
@@ -59,20 +48,20 @@ def _norm_id(v: Any) -> str | None:
 
 def _materialize_and_prepare(
     transactions_with_categories: Iterable[CategorizedTransaction], *, source_provider: str
-) -> tuple[list[CategorizedTransaction], list[_PreparedItem]]:
+) -> tuple[list[CategorizedTransaction], list[PreparedItem]]:
     items: list[CategorizedTransaction] = list(transactions_with_categories)
-    prepared: list[_PreparedItem] = []
+    prepared: list[PreparedItem] = []
     for idx, ci in enumerate(items):
         tx = ci.transaction
         eid = _norm_id(tx.get("id"))
         fp = compute_fingerprint(source_provider=source_provider, tx=tx)
         prepared.append(
-            _PreparedItem(
+            PreparedItem(
                 pos=idx,
                 tx=tx,
-                suggested=ci.category,
                 external_id=eid,
                 fingerprint=fp,
+                suggested=ci.category,
             )
         )
     return items, prepared
@@ -112,7 +101,7 @@ class _DisjointSet:
             self.parent[rb] = ra
 
 
-def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
+def _build_groups(prepared: list[PreparedItem]) -> dict[int, list[int]]:
     """Group indices by normalized merchant/description; no legacy fallback.
 
     New behavior (per issue #44):
@@ -148,145 +137,12 @@ def _build_groups(prepared: list[_PreparedItem]) -> dict[int, list[int]]:
     return groups_map
 
 
-# ----------------------------------------------------------------------------
-# DB queries and persistence
-# ----------------------------------------------------------------------------
-
-
 def _load_allowed_categories(session) -> set[str]:
     # Use scalars() for clarity and to avoid tuple indexing
     return set(session.scalars(select(FaCategory.code)).all())
 
 
-def _query_group_duplicates(
-    session,
-    *,
-    source_provider: str,
-    source_account: str | None,
-    group_eids: list[str],
-    group_fps: list[str],
-    exemplars: int,
-) -> tuple[list[tuple[str | None, Mapping[str, Any]]], str | None]:
-    """Return a limited sample of duplicates and a unanimous default category.
-
-    Optimizes IO by splitting the work into:
-    - an aggregate over matches to determine if all non-null categories agree;
-    - a limited sample (``exemplars``) of rows for display.
-    """
-    conds = []
-    if group_eids:
-        conds.append(FaTransaction.external_id.in_(group_eids))
-    if group_fps:
-        conds.append(FaTransaction.fingerprint_sha256.in_(group_fps))
-
-    rows: list[tuple[str | None, Mapping[str, Any]]] = []
-    unanimous: str | None = None
-    if conds:
-        base_filters = (
-            (FaTransaction.source_provider == source_provider),
-            (FaTransaction.source_account == source_account),
-            or_(*conds),
-        )
-
-        # Aggregate: count distinct non-null categories among matches
-        agg_stmt = (
-            select(func.count(distinct(FaTransaction.category)))
-            .where(*base_filters)
-            .where(FaTransaction.category.is_not(None))
-        )
-        distinct_count = session.execute(agg_stmt).scalar_one()
-        if distinct_count == 1:
-            # Fetch the single category value
-            unanimous = session.execute(
-                select(FaTransaction.category)
-                .where(*base_filters)
-                .where(FaTransaction.category.is_not(None))
-                .limit(1)
-            ).scalar_one()
-
-        # Fetch a limited sample for display
-        rows_stmt = (
-            select(FaTransaction.category, FaTransaction.raw_record)
-            .where(*base_filters)
-            .limit(exemplars)
-        )
-        rows = [(row[0], row[1]) for row in session.execute(rows_stmt).all()]
-
-    return rows, unanimous
-
-
-# Closed set of allowed category sources to keep DB values consistent.
-CategorySource = Literal["manual", "rule"]
-CATEGORY_SOURCE_MANUAL: CategorySource = "manual"
-CATEGORY_SOURCE_RULE: CategorySource = "rule"
-ALLOWED_CATEGORY_SOURCES: set[str] = {CATEGORY_SOURCE_MANUAL, CATEGORY_SOURCE_RULE}
-
-
-def _persist_group(
-    session,
-    *,
-    source_provider: str,
-    source_account: str | None,
-    group_items: list[_PreparedItem],
-    final_cat: str,
-    display_name: str | None = None,
-    category_source: CategorySource = CATEGORY_SOURCE_MANUAL,
-) -> None:
-    # Validate early to avoid any DB side effects on invalid input.
-    if category_source not in ALLOWED_CATEGORY_SOURCES:
-        raise ValueError(
-            "Unsupported category_source: "
-            f"{category_source!r}. Allowed: {sorted(ALLOWED_CATEGORY_SOURCES)}"
-        )
-    # Ensure upsert before updates
-    upsert_transactions(
-        session,
-        source_provider=source_provider,
-        source_account=source_account,
-        transactions=[it.tx for it in group_items],
-    )
-
-    now = func.now()
-    eids = [p.external_id for p in group_items if p.external_id is not None]
-    # Use all fingerprints from the group; do not exclude those that also have an external_id
-    fps = [p.fingerprint for p in group_items]
-
-    base = update(FaTransaction).where(FaTransaction.source_provider == source_provider)
-    if source_account is None:
-        base = base.where(FaTransaction.source_account.is_(None))
-    else:
-        base = base.where(FaTransaction.source_account == source_account)
-
-    values = {
-        "category": final_cat,
-        # Allow callers to distinguish operator selections from automated
-        # applications (e.g., rule-based prefill from DB duplicates).
-        "category_source": category_source,
-        "category_confidence": None,
-        "categorized_at": now,
-        "verified": True,
-        "updated_at": now,
-    }
-    if display_name is not None and display_name.strip():
-        values.update(
-            {
-                "display_name": display_name.strip(),
-                "display_name_source": "manual",
-                "renamed_at": now,
-            }
-        )
-
-    # Apply a single OR condition across the union of identifiers within the provider/account scope
-    conds = []
-    if eids:
-        conds.append(FaTransaction.external_id.in_(eids))
-    if fps:
-        conds.append(FaTransaction.fingerprint_sha256.in_(fps))
-    if conds:
-        session.execute(base.where(or_(*conds)).values(**values))
-
-
-def _best_display_name_candidate(group_items: list[_PreparedItem]) -> str:
+def _best_display_name_candidate(group_items: list[PreparedItem]) -> str:
     """Return a heuristic initial display-name suggestion for a group.
 
     Strategy: prefer the first non-empty ``merchant`` across the group's raw
@@ -432,7 +288,7 @@ def _fmt_tx_summary(tx: Mapping[str, Any]) -> tuple[str, str]:
 
 def _render_group_context(
     *,
-    group_items: list[_PreparedItem],
+    group_items: list[PreparedItem],
     db_dupes: list[tuple[str | None, Mapping[str, Any]]],
     exemplars: int,
     print_fn: Callable[..., None],
@@ -509,7 +365,7 @@ def _format_score_shorthand(item: CategorizedTransaction) -> str:
 def _select_default_category(
     *,
     db_unanimous: str | None,
-    group_items: list[_PreparedItem],
+    group_items: list[PreparedItem],
 ) -> str:
     """Choose the default category for a group.
 
@@ -863,7 +719,7 @@ def review_transaction_categories(
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
-            db_dupes, db_default = _query_group_duplicates(
+            db_dupes, db_default = query_group_duplicates(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
@@ -915,7 +771,7 @@ def review_transaction_categories(
                     # Non-fatal: any terminal issues should not block category saving
                     chosen_display = None
 
-            _persist_group(
+            persist_group(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
