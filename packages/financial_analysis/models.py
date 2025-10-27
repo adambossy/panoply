@@ -57,7 +57,7 @@ class CategorizedTransaction:
     revised_category: str | None = None
     revised_rationale: str | None = None
     revised_score: float | None = None
-    citations: tuple[str, ...] | None = None
+    citations: list[str] | None = None
 
 
 class RefundMatch(NamedTuple):
@@ -180,7 +180,7 @@ class LlmDecision(BaseModel):
     revised_category: str | None = None
     revised_rationale: str | None = None
     revised_score: float | None = None
-    citations: tuple[str, ...] | None = None
+    citations: list[str] | None = None
 
     @field_validator("rationale")
     @classmethod
@@ -201,11 +201,11 @@ class LlmDecision(BaseModel):
 
     @field_validator("citations")
     @classmethod
-    def _normalize_citations(cls, v: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | None:
+    def _normalize_citations(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return None
-        items = [s.strip() for s in list(v) if isinstance(s, str) and s.strip()]
-        return tuple(items) if items else None
+        items = [s.strip() for s in v if isinstance(s, str) and s.strip()]
+        return items or None
 
 
 class PageExemplar(BaseModel):
