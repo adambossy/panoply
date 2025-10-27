@@ -544,7 +544,7 @@ def categorize_expenses(
         enum and a concise hierarchy section in the prompt so the model prefers
         specific child categories and otherwise falls back to parents.
     page_size:
-        Page size for batching requests (default 100). Must be a positive
+        Page size for batching requests (default 10). Must be a positive
         integer when ``transactions`` is not empty.
 
     Returns
