@@ -124,7 +124,7 @@ libs/pmap/                      # Parallel mapping utility (currently empty stub
 
 ### LLM Categorization Flow
 1. Load taxonomy from `fa_categories` table
-2. Batch transactions into chunks (configurable chunk size, default 100)
+2. Batch transactions into chunks (configurable chunk size, default 10)
 3. Parallel processing via ThreadPoolExecutor (concurrency=4)
 4. Cache results in `.transactions/` directory (keyed by dataset_id hash of input + settings)
 5. Interactive review via prompt_toolkit completion menu
