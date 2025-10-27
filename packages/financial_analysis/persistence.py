@@ -224,11 +224,13 @@ def apply_category_updates(
         category = item.category
         external_id = _norm_str(tx.get("id"))
         # Choose confidence per update
-        eff_conf: float | None
+        effective_confidence: float | None
         if use_item_confidence:
-            eff_conf = item.revised_score if item.revised_score is not None else item.score
+            effective_confidence = (
+                item.revised_score if item.revised_score is not None else item.score
+            )
         else:
-            eff_conf = category_confidence
+            effective_confidence = category_confidence
 
         if external_id is not None:
             stmt = (
@@ -243,7 +245,7 @@ def apply_category_updates(
             stmt = stmt.values(
                 category=category,
                 category_source=category_source,
-                category_confidence=eff_conf,
+                category_confidence=effective_confidence,
                 categorized_at=now,
                 updated_at=now,
             )
@@ -258,15 +260,58 @@ def apply_category_updates(
             stmt = stmt.values(
                 category=category,
                 category_source=category_source,
-                category_confidence=eff_conf,
+                category_confidence=effective_confidence,
                 categorized_at=now,
                 updated_at=now,
             )
             session.execute(stmt)
+
+def auto_persist_high_confidence(
+    session: Session,
+    *,
+    source_provider: str,
+    source_account: str | None,
+    suggestions: Iterable[CategorizedTransaction],
+    min_confidence: float = 0.7,
+) -> int:
+    """Persist high-confidence suggestions to the DB.
+
+    Upserts the involved transactions and applies category updates for suggestions
+    whose effective confidence (``revised_score`` when present, else ``score``)
+    exceeds ``min_confidence``. Updates only rows where ``verified`` is False and
+    stores per-row confidence from the item.
+    """
+
+    def _effective_score(it: CategorizedTransaction) -> float | None:
+        return it.revised_score if it.revised_score is not None else it.score
+
+    hi_conf: list[CategorizedTransaction] = [
+        it for it in suggestions if (_effective_score(it) or 0.0) > min_confidence
+    ]
+    if not hi_conf:
+        return 0
+
+    upsert_transactions(
+        session,
+        source_provider=source_provider,
+        source_account=source_account,
+        transactions=[it.transaction for it in hi_conf],
+    )
+    apply_category_updates(
+        session,
+        source_provider=source_provider,
+        categorized=hi_conf,
+        category_source="llm",
+        category_confidence=None,
+        only_unverified=True,
+        use_item_confidence=True,
+    )
+    return len(hi_conf)
 
 
 __all__ = [
     "compute_fingerprint",
     "upsert_transactions",
     "apply_category_updates",
+    "auto_persist_high_confidence",
 ]
