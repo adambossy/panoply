@@ -245,7 +245,7 @@ def _categorize_page(
     # Visible trace that this page will be sent to the model (cache miss path).
     # Keep a concise, structured message so downstream log processors can key on it.
     _logger.info(
-        "categorize_expenses:page_llm page_index=%d count=%d",
+        "categorize_expenses:page_llm page_index=%d num_transactions=%d",
         page_index,
         count,
     )
