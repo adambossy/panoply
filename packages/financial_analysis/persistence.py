@@ -194,6 +194,27 @@ def apply_category_updates(
     """Update category fields on matching rows in ``fa_transactions``.
 
     Matching strategy mirrors :func:`upsert_transactions`.
+
+    Parameters
+    ----------
+    session:
+        Active SQLAlchemy session.
+    source_provider:
+        Provider key used to scope matches (e.g., "amex", "chase").
+    categorized:
+        Iterable of categorized transactions to apply.
+    category_source:
+        Label recorded in the DB for this update (e.g., "llm", "manual").
+    category_confidence:
+        When provided and ``use_item_confidence`` is False, this value is
+        applied to all rows. When ``use_item_confidence`` is True, this value
+        is ignored and each row derives confidence from
+        ``item.revised_score`` when present, else ``item.score``.
+    only_unverified:
+        When True, apply updates only to rows where ``verified`` is False to
+        avoid clobbering operator-reviewed categories.
+    use_item_confidence:
+        When True, store per-row confidence as described above.
     """
 
     now = func.now()

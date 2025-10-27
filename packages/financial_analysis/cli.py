@@ -482,7 +482,10 @@ def cmd_review_transaction_categories(
                 )
             print(f"Auto-applied {len(hi_conf)} high-confidence suggestions (> 0.7).")
     except Exception as e:
-        print(f"Warning: failed to auto-apply high-confidence suggestions: {e}")
+        print(
+            f"Warning: failed to auto-apply high-confidence suggestions: {e}",
+            file=sys.stderr,
+        )
 
     # Begin review for unresolved groups only (pass only the unresolved subset
     # so the interactive UI processes fewer groups as intended).
