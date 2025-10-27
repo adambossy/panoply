@@ -332,6 +332,10 @@ def cmd_review_transaction_categories(
     # and root callback) so env-dependent checks work even if this function is
     # called directly.
     load_dotenv(override=False)
+    # Ensure library loggers emit at INFO by default so categorize/review logs are visible
+    from .logging_setup import configure_logging
+
+    configure_logging(None)
 
     from .api import review_transaction_categories
     from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
@@ -382,6 +386,11 @@ def cmd_review_transaction_categories(
         return 1
 
     total = len(ctv_items)
+    # Step 1: Parse
+    print(
+        f"Parsed transactions: count={total} provider={source_provider} "
+        f"account={source_account or '-'}"
+    )
     if total == 0:
         print("No transactions to review.")
         return 0
@@ -426,8 +435,20 @@ def cmd_review_transaction_categories(
         print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
         return 1
 
-    # Light status line so operators know we're working while pages run in parallel
-    print(f"Categorizing {len(unresolved_ctv)} unresolved items…")
+    # Step 4: Remaining → LLM batching (pages of 10 via p_map)
+    from .cache import compute_dataset_id as _compute_dataset_id
+
+    page_size = 10  # keep in sync with categorize._PAGE_SIZE_DEFAULT
+    approx_groups = len(unresolved_ctv)  # estimate; exact count computed inside categorize
+    approx_pages = (approx_groups + page_size - 1) // page_size
+    dataset_id = _compute_dataset_id(
+        ctv_items=unresolved_ctv, source_provider=source_provider, taxonomy=taxonomy
+    )
+    print(
+        "LLM: unresolved_items="
+        f"{len(unresolved_ctv)} groups≈{approx_groups} pages≈{approx_pages} "
+        f"page_size={page_size} concurrency=4 dataset_id={dataset_id[:8]}"
+    )
 
     try:
         # Categorize only unresolved items using dataset-level cache. This defers
@@ -436,6 +457,7 @@ def cmd_review_transaction_categories(
             transactions=unresolved_ctv,
             taxonomy=taxonomy,
             source_provider=source_provider,
+            page_size=page_size,
         )
     except Exception as e:
         print(f"Error: categorization failed: {e}", file=sys.stderr)
@@ -452,6 +474,7 @@ def cmd_review_transaction_categories(
     # Auto-apply high-confidence suggestions (Issue #94 follow-up):
     # Persist any suggestion with effective confidence > 0.7. Only update rows
     # that are currently unverified to avoid clobbering operator-reviewed categories.
+    applied_hc = 0
     try:
         from db.client import session_scope
         from .persistence import auto_persist_high_confidence
@@ -464,8 +487,9 @@ def cmd_review_transaction_categories(
                 suggestions=all_unresolved_suggestions,
                 min_confidence=0.7,
             )
-        if applied:
-            print(f"Auto-applied {applied} high-confidence suggestions (> 0.7).")
+        applied_hc = int(applied)
+        if applied_hc:
+            print(f"Auto-applied {applied_hc} high-confidence suggestions (> 0.7).")
     except Exception as e:
         print(
             f"Warning: failed to auto-apply high-confidence suggestions: {e}",
@@ -486,6 +510,9 @@ def cmd_review_transaction_categories(
     except Exception as e:
         print(f"Error: review failed: {e}", file=sys.stderr)
         return 1
+
+    # Final wrap line to summarize the session at a glance
+    print(f"Done: prefilled_groups={prefilled_groups} auto_applied_items={applied_hc}")
 
     return 0
 
