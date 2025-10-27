@@ -188,6 +188,8 @@ def apply_category_updates(
     categorized: Iterable[CategorizedTransaction],
     category_source: str = "llm",
     category_confidence: float | None = None,
+    only_unverified: bool = False,
+    use_item_confidence: bool = False,
 ) -> None:
     """Update category fields on matching rows in ``fa_transactions``.
 
@@ -200,6 +202,12 @@ def apply_category_updates(
         tx = item.transaction
         category = item.category
         external_id = _norm_str(tx.get("id"))
+        # Choose confidence per update
+        eff_conf: float | None
+        if use_item_confidence:
+            eff_conf = item.revised_score if item.revised_score is not None else item.score
+        else:
+            eff_conf = category_confidence
 
         if external_id is not None:
             stmt = (
@@ -208,27 +216,30 @@ def apply_category_updates(
                     (FaTransaction.source_provider == source_provider)
                     & (FaTransaction.external_id == external_id)
                 )
-                .values(
-                    category=category,
-                    category_source=category_source,
-                    category_confidence=category_confidence,
-                    categorized_at=now,
-                    updated_at=now,
-                )
+            )
+            if only_unverified:
+                stmt = stmt.where(FaTransaction.verified.is_(False))
+            stmt = stmt.values(
+                category=category,
+                category_source=category_source,
+                category_confidence=eff_conf,
+                categorized_at=now,
+                updated_at=now,
             )
             session.execute(stmt)
         else:
             fingerprint = compute_fingerprint(source_provider=source_provider, tx=tx)
-            stmt = (
-                update(FaTransaction)
-                .where(FaTransaction.fingerprint_sha256 == fingerprint)
-                .values(
-                    category=category,
-                    category_source=category_source,
-                    category_confidence=category_confidence,
-                    categorized_at=now,
-                    updated_at=now,
-                )
+            stmt = update(FaTransaction).where(
+                FaTransaction.fingerprint_sha256 == fingerprint
+            )
+            if only_unverified:
+                stmt = stmt.where(FaTransaction.verified.is_(False))
+            stmt = stmt.values(
+                category=category,
+                category_source=category_source,
+                category_confidence=eff_conf,
+                categorized_at=now,
+                updated_at=now,
             )
             session.execute(stmt)
 

@@ -449,6 +449,41 @@ def cmd_review_transaction_categories(
         )
         return 1
 
+    # Auto-apply high-confidence suggestions (Issue #94 follow-up):
+    # Persist any suggestion with effective confidence > 0.7 (using revised_score
+    # when present, else score). Only update rows that are currently unverified
+    # to avoid clobbering operator-reviewed categories.
+    try:
+        from db.client import session_scope
+        from .persistence import upsert_transactions, apply_category_updates
+
+        def _eff_score(item) -> float:
+            return item.revised_score if item.revised_score is not None else item.score
+
+        hi_conf = [it for it in all_unresolved_suggestions if (_eff_score(it) or 0.0) > 0.7]
+        if hi_conf:
+            with session_scope(database_url=database_url) as session:
+                # Ensure rows exist before updates
+                upsert_transactions(
+                    session,
+                    source_provider=source_provider,
+                    source_account=source_account,
+                    transactions=[it.transaction for it in hi_conf],
+                )
+                # Apply categories with per-item confidence, but only when unverified
+                apply_category_updates(
+                    session,
+                    source_provider=source_provider,
+                    categorized=hi_conf,
+                    category_source="llm",
+                    category_confidence=None,
+                    only_unverified=True,
+                    use_item_confidence=True,
+                )
+            print(f"Auto-applied {len(hi_conf)} high-confidence suggestions (> 0.7).")
+    except Exception as e:
+        print(f"Warning: failed to auto-apply high-confidence suggestions: {e}")
+
     # Begin review for unresolved groups only (pass only the unresolved subset
     # so the interactive UI processes fewer groups as intended).
     try:
