@@ -233,12 +233,9 @@ def apply_category_updates(
             effective_confidence = category_confidence
 
         if external_id is not None:
-            stmt = (
-                update(FaTransaction)
-                .where(
-                    (FaTransaction.source_provider == source_provider)
-                    & (FaTransaction.external_id == external_id)
-                )
+            stmt = update(FaTransaction).where(
+                (FaTransaction.source_provider == source_provider)
+                & (FaTransaction.external_id == external_id)
             )
             if only_unverified:
                 stmt = stmt.where(FaTransaction.verified.is_(False))
@@ -252,9 +249,7 @@ def apply_category_updates(
             session.execute(stmt)
         else:
             fingerprint = compute_fingerprint(source_provider=source_provider, tx=tx)
-            stmt = update(FaTransaction).where(
-                FaTransaction.fingerprint_sha256 == fingerprint
-            )
+            stmt = update(FaTransaction).where(FaTransaction.fingerprint_sha256 == fingerprint)
             if only_unverified:
                 stmt = stmt.where(FaTransaction.verified.is_(False))
             stmt = stmt.values(
@@ -265,6 +260,7 @@ def apply_category_updates(
                 updated_at=now,
             )
             session.execute(stmt)
+
 
 def auto_persist_high_confidence(
     session: Session,

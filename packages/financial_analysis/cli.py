@@ -465,9 +465,7 @@ def cmd_review_transaction_categories(
                 min_confidence=0.7,
             )
         if applied:
-            print(
-                f"Auto-applied {applied} high-confidence suggestions (> 0.7)."
-            )
+            print(f"Auto-applied {applied} high-confidence suggestions (> 0.7).")
     except Exception as e:
         print(
             f"Warning: failed to auto-apply high-confidence suggestions: {e}",
