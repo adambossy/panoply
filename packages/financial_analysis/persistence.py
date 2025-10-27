@@ -188,10 +188,33 @@ def apply_category_updates(
     categorized: Iterable[CategorizedTransaction],
     category_source: str = "llm",
     category_confidence: float | None = None,
+    only_unverified: bool = False,
+    use_item_confidence: bool = False,
 ) -> None:
     """Update category fields on matching rows in ``fa_transactions``.
 
     Matching strategy mirrors :func:`upsert_transactions`.
+
+    Parameters
+    ----------
+    session:
+        Active SQLAlchemy session.
+    source_provider:
+        Provider key used to scope matches (e.g., "amex", "chase").
+    categorized:
+        Iterable of categorized transactions to apply.
+    category_source:
+        Label recorded in the DB for this update (e.g., "llm", "manual").
+    category_confidence:
+        When provided and ``use_item_confidence`` is False, this value is
+        applied to all rows. When ``use_item_confidence`` is True, this value
+        is ignored and each row derives confidence from
+        ``item.revised_score`` when present, else ``item.score``.
+    only_unverified:
+        When True, apply updates only to rows where ``verified`` is False to
+        avoid clobbering operator-reviewed categories.
+    use_item_confidence:
+        When True, store per-row confidence as described above.
     """
 
     now = func.now()
@@ -200,41 +223,91 @@ def apply_category_updates(
         tx = item.transaction
         category = item.category
         external_id = _norm_str(tx.get("id"))
+        # Choose confidence per update
+        effective_confidence: float | None
+        if use_item_confidence:
+            effective_confidence = (
+                item.revised_score if item.revised_score is not None else item.score
+            )
+        else:
+            effective_confidence = category_confidence
 
         if external_id is not None:
-            stmt = (
-                update(FaTransaction)
-                .where(
-                    (FaTransaction.source_provider == source_provider)
-                    & (FaTransaction.external_id == external_id)
-                )
-                .values(
-                    category=category,
-                    category_source=category_source,
-                    category_confidence=category_confidence,
-                    categorized_at=now,
-                    updated_at=now,
-                )
+            stmt = update(FaTransaction).where(
+                (FaTransaction.source_provider == source_provider)
+                & (FaTransaction.external_id == external_id)
+            )
+            if only_unverified:
+                stmt = stmt.where(FaTransaction.verified.is_(False))
+            stmt = stmt.values(
+                category=category,
+                category_source=category_source,
+                category_confidence=effective_confidence,
+                categorized_at=now,
+                updated_at=now,
             )
             session.execute(stmt)
         else:
             fingerprint = compute_fingerprint(source_provider=source_provider, tx=tx)
-            stmt = (
-                update(FaTransaction)
-                .where(FaTransaction.fingerprint_sha256 == fingerprint)
-                .values(
-                    category=category,
-                    category_source=category_source,
-                    category_confidence=category_confidence,
-                    categorized_at=now,
-                    updated_at=now,
-                )
+            stmt = update(FaTransaction).where(FaTransaction.fingerprint_sha256 == fingerprint)
+            if only_unverified:
+                stmt = stmt.where(FaTransaction.verified.is_(False))
+            stmt = stmt.values(
+                category=category,
+                category_source=category_source,
+                category_confidence=effective_confidence,
+                categorized_at=now,
+                updated_at=now,
             )
             session.execute(stmt)
+
+
+def auto_persist_high_confidence(
+    session: Session,
+    *,
+    source_provider: str,
+    source_account: str | None,
+    suggestions: Iterable[CategorizedTransaction],
+    min_confidence: float = 0.7,
+) -> int:
+    """Persist high-confidence suggestions to the DB.
+
+    Upserts the involved transactions and applies category updates for suggestions
+    whose effective confidence (``revised_score`` when present, else ``score``)
+    exceeds ``min_confidence``. Updates only rows where ``verified`` is False and
+    stores per-row confidence from the item.
+    """
+
+    def _effective_score(it: CategorizedTransaction) -> float | None:
+        return it.revised_score if it.revised_score is not None else it.score
+
+    hi_conf: list[CategorizedTransaction] = [
+        it for it in suggestions if (_effective_score(it) or 0.0) > min_confidence
+    ]
+    if not hi_conf:
+        return 0
+
+    upsert_transactions(
+        session,
+        source_provider=source_provider,
+        source_account=source_account,
+        transactions=[it.transaction for it in hi_conf],
+    )
+    apply_category_updates(
+        session,
+        source_provider=source_provider,
+        categorized=hi_conf,
+        category_source="llm",
+        category_confidence=None,
+        only_unverified=True,
+        use_item_confidence=True,
+    )
+    return len(hi_conf)
 
 
 __all__ = [
     "compute_fingerprint",
     "upsert_transactions",
     "apply_category_updates",
+    "auto_persist_high_confidence",
 ]

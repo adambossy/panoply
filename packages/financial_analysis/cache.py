@@ -30,10 +30,12 @@ from typing import Any
 
 from . import prompting
 from .logging_setup import get_logger
+from .models import LlmDecision, PageCacheFile, PageExemplar, PageItem
 from .persistence import compute_fingerprint
 
-# Single schema version shared across cache files
-SCHEMA_VERSION: int = 2
+# Page-cache schema version (independent from any other cache schema versions).
+# Bump only when the on-disk page JSON shape changes.
+SCHEMA_VERSION: int = 3
 
 
 _DATASET_ID_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -138,7 +140,7 @@ def compute_dataset_id(
 
 
 # ----------------------------------------------------------------------------
-# Dataset I/O (single-file cache)
+# Page cache I/O
 # ----------------------------------------------------------------------------
 
 
@@ -171,7 +173,7 @@ def read_page_from_cache(
     taxonomy: Sequence[Mapping[str, object]],
     original_seq: list[Mapping[str, Any]],
     exemplar_abs_indices: list[int],
-) -> list[tuple[int, dict[str, Any]]] | None:
+) -> list[tuple[int, LlmDecision]] | None:
     """Return cached page results when present and valid; otherwise ``None``.
 
     Validation checks:
@@ -185,7 +187,9 @@ def read_page_from_cache(
         return None
 
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        # Parse and validate structure with Pydantic; reject unknowns/coercions
+        parsed = PageCacheFile.model_validate_json(text)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         _logger.debug(
             (
@@ -199,63 +203,44 @@ def read_page_from_cache(
             exc_info=True,
         )
         return None
+
+    # Cheap identity checks; treat any mismatch as a cache miss.
     if (
-        not isinstance(raw, dict)
-        or raw.get("schema_version") != SCHEMA_VERSION
-        or raw.get("dataset_id") != dataset_id
-        or raw.get("page_size") != page_size
-        or raw.get("page_index") != page_index
-        or raw.get("settings_hash") != _settings_hash(taxonomy)
+        parsed.schema_version != SCHEMA_VERSION
+        or parsed.dataset_id != dataset_id
+        or parsed.page_size != page_size
+        or parsed.page_index != page_index
+        or parsed.settings_hash != _settings_hash(taxonomy)
     ):
         return None
 
-    ex = raw.get("exemplars")
-    if not isinstance(ex, list) or len(ex) != len(exemplar_abs_indices):
+    # Alignment checks
+    if len(parsed.exemplars) != len(exemplar_abs_indices):
         return None
 
-    # Validate each exemplar's absolute index and fingerprint
-    for j, ent in enumerate(ex):
-        if not isinstance(ent, dict):
+    # Exemplar indices must match caller-supplied indices exactly and in order
+    for j, (exp_abs, supplied_abs) in enumerate(
+        zip((e.abs_index for e in parsed.exemplars), exemplar_abs_indices, strict=True)
+    ):
+        if exp_abs != supplied_abs:
             return None
-        abs_idx_v = ent.get("abs_index")
-        fp_v = ent.get("fp")
-        if not isinstance(abs_idx_v, int) or not isinstance(fp_v, str):
-            return None
-        if abs_idx_v != exemplar_abs_indices[j]:
-            return None
-        tx = original_seq[abs_idx_v]
-        if compute_fingerprint(source_provider=source_provider, tx=tx) != fp_v:
+        # Fingerprint must match current original_seq payload
+        tx = original_seq[exp_abs]
+        if compute_fingerprint(source_provider=source_provider, tx=tx) != parsed.exemplars[j].fp:
             return None
 
-    items = raw.get("items")
-    if not isinstance(items, list) or len(items) != len(exemplar_abs_indices):
+    # Items must be a 1:1 mapping to the exemplar set with unique abs_index
+    if len(parsed.items) != len(parsed.exemplars):
         return None
-
-    exemplar_set = set(exemplar_abs_indices)
-    idx_to_details: dict[int, dict[str, Any]] = {}
-    for ent in items:
-        if not isinstance(ent, dict):
+    exemplar_set = {e.abs_index for e in parsed.exemplars}
+    idx_to_details: dict[int, LlmDecision] = {}
+    for it in parsed.items:
+        if it.abs_index not in exemplar_set or it.abs_index in idx_to_details:
             return None
-        abs_index = ent.get("abs_index")
-        det = ent.get("details")
-        if not isinstance(abs_index, int) or not isinstance(det, dict):
-            return None
-        # Ensure 1:1 alignment and uniqueness
-        if abs_index not in exemplar_set or abs_index in idx_to_details:
-            return None
-        # Light sanity of required detail fields (types only)
-        cat = det.get("category")
-        rationale_v = det.get("rationale")
-        score_v = det.get("score")
-        if not isinstance(cat, str) or not isinstance(rationale_v, str):
-            return None
-        if not isinstance(score_v, (int, float)):  # noqa: UP038 - isinstance() requires tuple
-            return None
-        idx_to_details[abs_index] = det
+        idx_to_details[it.abs_index] = it.details
 
     # Emit in exemplar order for deterministic downstream behavior
-    out = [(abs_i, idx_to_details[abs_i]) for abs_i in exemplar_abs_indices]
-    return out
+    return [(abs_i, idx_to_details[abs_i]) for abs_i in exemplar_abs_indices]
 
 
 def write_page_to_cache(
@@ -267,41 +252,33 @@ def write_page_to_cache(
     taxonomy: Sequence[Mapping[str, object]],
     original_seq: list[Mapping[str, Any]],
     exemplar_abs_indices: list[int],
-    items: list[tuple[int, dict[str, Any]]],
+    items: list[tuple[int, LlmDecision]],
 ) -> None:
     path = _page_path(dataset_id, page_size=page_size, page_index=page_index)
     tmp = path.with_suffix(path.suffix + ".tmp")
 
-    payload: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "dataset_id": dataset_id,
-        "page_size": page_size,
-        "page_index": page_index,
-        "settings_hash": _settings_hash(taxonomy),
-        # Exemplars section supports alignment validation on read
-        "exemplars": [
-            {
-                "abs_index": abs_i,
-                "fp": compute_fingerprint(source_provider=source_provider, tx=original_seq[abs_i]),
-            }
+    page = PageCacheFile(
+        schema_version=SCHEMA_VERSION,
+        dataset_id=dataset_id,
+        page_size=page_size,
+        page_index=page_index,
+        settings_hash=_settings_hash(taxonomy),
+        exemplars=[
+            PageExemplar(
+                abs_index=abs_i,
+                fp=compute_fingerprint(source_provider=source_provider, tx=original_seq[abs_i]),
+            )
             for abs_i in exemplar_abs_indices
         ],
-        # Items: one per exemplar, holding parsed details
-        "items": [
-            {
-                "abs_index": abs_i,
-                "details": det,
-            }
-            for (abs_i, det) in items
-        ],
-    }
+        items=[PageItem(abs_index=abs_i, details=det) for (abs_i, det) in items],
+    )
 
     # Write atomically, cleaning up the temp file on failure
     import contextlib
 
     try:
         tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(page.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
         )
         os.replace(tmp, path)

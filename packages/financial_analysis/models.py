@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
+from pydantic import BaseModel, ConfigDict, field_validator
+
 # ---------------------------------------------------------------------------
 # Core record and collections
 # ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ class CategorizedTransaction:
     revised_category: str | None = None
     revised_rationale: str | None = None
     revised_score: float | None = None
-    citations: tuple[str, ...] | None = None
+    citations: list[str] | None = None
 
 
 class RefundMatch(NamedTuple):
@@ -154,3 +156,82 @@ type TransactionPartitions = Iterable[Iterable[TransactionRecord]]
 
 The partitioning strategy and period semantics are unspecified here.
 """
+
+
+# ---------------------------------------------------------------------------
+# DTOs for typed page-cache I/O
+# ---------------------------------------------------------------------------
+
+
+class LlmDecision(BaseModel):
+    """Typed, validated model of a single categorization decision.
+
+    Mirrors the JSON written to the page cache (and produced by the parser in
+    ``categorization.py``). Extras are allowed to preserve the current on-disk
+    JSON shape (e.g., page-relative ``idx`` and optional ``id``) while keeping
+    the typed API focused on decision fields.
+    """
+
+    model_config = ConfigDict(strict=True, extra="allow", str_strip_whitespace=True)
+
+    category: str
+    rationale: str
+    score: float
+    revised_category: str | None = None
+    revised_rationale: str | None = None
+    revised_score: float | None = None
+    citations: list[str] | None = None
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("rationale must be non-empty")
+        return v
+
+    @field_validator("score", "revised_score")
+    @classmethod
+    def _score_in_unit_interval(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        fv = float(v)
+        if 0.0 <= fv <= 1.0:
+            return fv
+        raise ValueError("score must be within [0,1]")
+
+    @field_validator("citations")
+    @classmethod
+    def _normalize_citations(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        items = [s.strip() for s in v if isinstance(s, str) and s.strip()]
+        return items or None
+
+
+class PageExemplar(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
+    abs_index: int
+    fp: str
+
+
+class PageItem(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    abs_index: int
+    details: LlmDecision
+
+
+class PageCacheFile(BaseModel):
+    """Top-level schema for a page cache JSON file."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
+
+    # Metadata identifying the dataset and page
+    schema_version: int
+    dataset_id: str
+    page_size: int
+    page_index: int
+    settings_hash: str
+
+    # Payload: alignment and decision details
+    exemplars: list[PageExemplar]
+    items: list[PageItem]

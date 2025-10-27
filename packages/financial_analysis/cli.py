@@ -449,6 +449,29 @@ def cmd_review_transaction_categories(
         )
         return 1
 
+    # Auto-apply high-confidence suggestions (Issue #94 follow-up):
+    # Persist any suggestion with effective confidence > 0.7. Only update rows
+    # that are currently unverified to avoid clobbering operator-reviewed categories.
+    try:
+        from db.client import session_scope
+        from .persistence import auto_persist_high_confidence
+
+        with session_scope(database_url=database_url) as session:
+            applied = auto_persist_high_confidence(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                suggestions=all_unresolved_suggestions,
+                min_confidence=0.7,
+            )
+        if applied:
+            print(f"Auto-applied {applied} high-confidence suggestions (> 0.7).")
+    except Exception as e:
+        print(
+            f"Warning: failed to auto-apply high-confidence suggestions: {e}",
+            file=sys.stderr,
+        )
+
     # Begin review for unresolved groups only (pass only the unresolved subset
     # so the interactive UI processes fewer groups as intended).
     try:
