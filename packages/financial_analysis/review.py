@@ -736,7 +736,7 @@ def review_transaction_categories(
         # in-session rows immediately. Persist and mark them as finalized so the
         # main loop will skip them. Emit one concise line per key.
         prefilled_assigned: set[int] = set()
-        prefilled_groups: int = 0
+        prefilled_applied: int = 0
         for _k, positions in by_key.items():
             if not positions:
                 continue
@@ -779,7 +779,7 @@ def review_transaction_categories(
                     score=1.0,
                 )
 
-            prefilled_groups += 1
+            prefilled_applied += 1
 
             merchant_display_raw = (
                 group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
@@ -823,11 +823,8 @@ def review_transaction_categories(
 
         # Summary before review starts
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
-        print_fn(
-            _format_pre_review_summary(
-                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
-            )
-        )
+        total_prefilled = (prefilled_groups or 0) + prefilled_applied
+        print_fn(_format_pre_review_summary(prefilled_groups=total_prefilled, remaining_by_root=gated_rem_by_root))
 
         for root in group_roots:
             idxs = groups_map[root]
