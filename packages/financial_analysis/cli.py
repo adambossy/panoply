@@ -437,8 +437,9 @@ def cmd_review_transaction_categories(
 
     # Step 4: Remaining → LLM batching (pages of 10 via p_map)
     from .cache import compute_dataset_id as _compute_dataset_id
+    from .categorize import PAGE_SIZE_DEFAULT
 
-    page_size = 10  # keep in sync with categorize._PAGE_SIZE_DEFAULT
+    page_size = PAGE_SIZE_DEFAULT
     approx_groups = len(unresolved_ctv)  # estimate; exact count computed inside categorize
     approx_pages = (approx_groups + page_size - 1) // page_size
     dataset_id = _compute_dataset_id(
@@ -447,7 +448,7 @@ def cmd_review_transaction_categories(
     print(
         "LLM: unresolved_items="
         f"{len(unresolved_ctv)} groups≈{approx_groups} pages≈{approx_pages} "
-        f"page_size={page_size} concurrency=4 dataset_id={dataset_id[:8]}"
+        f"page_size={page_size} dataset_id={dataset_id[:8]}"
     )
 
     try:
