@@ -1,4 +1,3 @@
-# ruff: noqa: I001
 """Expense categorization flow extracted from ``api.py``.
 
 Public API:
@@ -23,15 +22,15 @@ from openai import OpenAI
 from openai.types.responses import ResponseTextConfigParam
 from pmap import p_map
 
-
 from . import prompting
+from .cache import compute_dataset_id, read_page_from_cache, write_page_to_cache
 from .categorization import (
     ensure_valid_ctv_descriptions,
     parse_and_align_category_details,
 )
-from .cache import compute_dataset_id, read_page_from_cache, write_page_to_cache
 from .logging_setup import get_logger
 from .models import CategorizedTransaction, LlmDecision, Transactions
+
 # DB/session and review helpers are imported lazily inside functions where
 # needed to avoid side effects at import time and to limit dependency surface.
 
@@ -384,14 +383,10 @@ def prefill_unanimous_groups_from_db(
     """
 
     # Local imports keep module import cheap and avoid global DB dependencies
-    from db.client import session_scope  # noqa: I001
+    from db.client import session_scope
 
-    from .review import (  # noqa: I001
-        _PreparedItem as _ReviewPreparedItem,
-        _query_group_duplicates as _review_query_group_duplicates,
-        _persist_group as _review_persist_group,
-    )
-    from .persistence import compute_fingerprint  # noqa: I001
+    from .duplicates import PreparedItem, persist_group, query_group_duplicates
+    from .persistence import compute_fingerprint
 
     try:
         _exemplars, by_key, _singletons = _group_by_normalized_merchant(ctv_items)
@@ -409,7 +404,7 @@ def prefill_unanimous_groups_from_db(
             # Build identifiers for DB lookup
             group_eids: list[str] = []
             group_fps: list[str] = []
-            group_items: list[_ReviewPreparedItem] = []
+            group_items: list[PreparedItem] = []
             for i in positions:
                 tx = ctv_items[i]
                 tx_id_val = tx.get("id")
@@ -419,17 +414,17 @@ def prefill_unanimous_groups_from_db(
                 fp = compute_fingerprint(source_provider=source_provider, tx=tx)
                 group_fps.append(fp)
                 group_items.append(
-                    _ReviewPreparedItem(
+                    PreparedItem(
                         pos=i,
                         tx=tx,
-                        suggested="",  # not used in persistence path
                         external_id=eid,
                         fingerprint=fp,
+                        suggested="",  # not used in persistence path
                     )
                 )
 
             # Query duplicates once per group; when unanimous, auto-apply
-            _dupes, unanimous = _review_query_group_duplicates(
+            _dupes, unanimous = query_group_duplicates(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
@@ -440,7 +435,7 @@ def prefill_unanimous_groups_from_db(
             if not unanimous:
                 continue
 
-            _review_persist_group(
+            persist_group(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
