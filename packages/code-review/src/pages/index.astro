@@ -395,6 +395,7 @@
 			let currentDiagram = null;
 			let selectedCode = null;
 			let currentFile = null;
+			let functionNodes = []; // Store function metadata for click handling
 
 			// File input handling
 			const fileInput = document.getElementById('diff-file');
@@ -492,56 +493,134 @@
 				return { files };
 			}
 
-			// Generate Mermaid diagram from diff
+			// Extract functions from diff
+			function extractFunctions(diff) {
+				const functions = [];
+				const functionPatterns = [
+					{ regex: /^\s*(?:async\s+)?function\s+(\w+)\s*\(/, lang: 'js', type: 'function' },
+					{ regex: /^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(/, lang: 'js', type: 'arrow' },
+					{ regex: /^\s*(?:async\s+)?def\s+(\w+)\s*\(/, lang: 'py', type: 'function' },
+					{ regex: /^\s*class\s+(\w+)/, lang: 'py', type: 'class' },
+					{ regex: /^\s*func\s+(\w+)\s*\(/, lang: 'go', type: 'function' },
+					{ regex: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:async\s+)?(\w+)\s*\([^)]*\)\s*{/, lang: 'java', type: 'method' },
+				];
+
+				diff.files.forEach(file => {
+					const fileName = file.newPath || file.oldPath;
+					file.hunks.forEach(hunk => {
+						hunk.lines.forEach((line, lineIdx) => {
+							if (line.type === 'addition' || line.type === 'deletion') {
+								for (const pattern of functionPatterns) {
+									const match = line.content.match(pattern.regex);
+									if (match) {
+										const functionName = match[1];
+										const lineNumber = line.type === 'addition' ?
+											hunk.newStart + lineIdx :
+											hunk.oldStart + lineIdx;
+
+										// Count additions/deletions in this function's scope
+										let additions = 0;
+										let deletions = 0;
+										let scopeDepth = 0;
+										let inFunction = false;
+
+										for (let i = lineIdx; i < hunk.lines.length && scopeDepth >= 0; i++) {
+											const scopeLine = hunk.lines[i];
+											if (i === lineIdx) inFunction = true;
+
+											if (inFunction) {
+												if (scopeLine.content.includes('{')) scopeDepth++;
+												if (scopeLine.content.includes('}')) scopeDepth--;
+
+												if (scopeLine.type === 'addition') additions++;
+												if (scopeLine.type === 'deletion') deletions++;
+
+												if (scopeDepth === 0 && i > lineIdx) break;
+											}
+										}
+
+										functions.push({
+											name: functionName,
+											file: fileName,
+											shortFile: fileName.split('/').pop(),
+											lineNumber,
+											changeType: line.type,
+											additions,
+											deletions,
+											type: pattern.type,
+											fullLine: line.content,
+											hunk
+										});
+										break;
+									}
+								}
+							}
+						});
+					});
+				});
+
+				return functions;
+			}
+
+			// Generate Mermaid diagram from functions
 			function generateMermaidDiagram(diff) {
 				if (!diff || !diff.files || diff.files.length === 0) {
 					return 'graph TD\n    A[No changes detected]';
 				}
 
+				const functions = extractFunctions(diff);
+				functionNodes = functions; // Store for click handling
+
+				if (functions.length === 0) {
+					return 'graph TD\n    A[No function changes detected]';
+				}
+
 				let diagram = 'graph TD\n';
 				const nodes = new Map();
-				let nodeId = 0;
 
-				diff.files.forEach((file, fileIndex) => {
-					const fileName = file.newPath || file.oldPath;
-					const shortName = fileName.split('/').pop();
-					const id = `file${nodeId++}`;
+				// Create nodes for each function
+				functions.forEach((func, index) => {
+					const id = `func${index}`;
+					const changeCount = func.additions + func.deletions;
+					const symbol = func.changeType === 'addition' ? '+' :
+								   func.changeType === 'deletion' ? '-' : '±';
 
-					nodes.set(fileName, { id, file, fileIndex });
+					const label = `${func.name}<br/>${func.shortFile}<br/>${symbol}${changeCount} lines`;
+					diagram += `    ${id}["${label}"]\n`;
 
-					const changeType = file.additions > 0 && file.deletions > 0 ? 'modified' :
-									   file.additions > 0 ? 'added' : 'deleted';
-					const symbol = changeType === 'modified' ? '±' :
-								   changeType === 'added' ? '+' : '-';
+					// Color based on change type
+					const color = func.changeType === 'addition' ? '#1e3c1e' :
+								  func.changeType === 'deletion' ? '#4b1818' : '#0e639c';
+					diagram += `    style ${id} fill:${color},stroke:#1177bb,color:#fff\n`;
 
-					diagram += `    ${id}["${shortName}<br/>${symbol}${file.additions + file.deletions} lines"]\n`;
-					diagram += `    style ${id} fill:#0e639c,stroke:#1177bb,color:#fff\n`;
+					nodes.set(func.name, { id, func, index });
 				});
 
-				// Try to infer relationships based on imports or function calls
-				diff.files.forEach((file, fileIndex) => {
-					const fileName = file.newPath || file.oldPath;
-					const currentNode = nodes.get(fileName);
+				// Find function call relationships
+				functions.forEach((func, index) => {
+					const currentId = `func${index}`;
 
-					// Look for imports or dependencies in the diff
-					file.hunks.forEach(hunk => {
-						hunk.lines.forEach(line => {
-							if (line.type === 'addition' &&
-								(line.content.includes('import') ||
-								 line.content.includes('require') ||
-								 line.content.includes('from '))) {
-
-								// Try to match with other files in the diff
-								nodes.forEach((targetNode, targetFile) => {
-									if (targetFile !== fileName) {
-										const targetShort = targetFile.split('/').pop().replace(/\.(js|ts|py|java|go)$/, '');
-										if (line.content.includes(targetShort)) {
-											diagram += `    ${currentNode.id} --> ${targetNode.id}\n`;
+					// Look for function calls in this function's lines
+					diff.files.forEach(file => {
+						if (file.newPath === func.file || file.oldPath === func.file) {
+							file.hunks.forEach(hunk => {
+								hunk.lines.forEach(line => {
+									// Search for calls to other functions in our list
+									functions.forEach((targetFunc, targetIndex) => {
+										if (targetFunc.name !== func.name) {
+											const callPattern = new RegExp(`\\b${targetFunc.name}\\s*\\(`, 'g');
+											if (callPattern.test(line.content)) {
+												const targetId = `func${targetIndex}`;
+												// Avoid duplicate edges
+												if (!diagram.includes(`${currentId} --> ${targetId}`)) {
+													diagram += `    ${currentId} --> ${targetId}\n`;
+												}
+											}
 										}
-									}
+									});
 								});
-							}
-						});
+							});
+						}
 					});
 				});
 
@@ -568,13 +647,69 @@
 						// Highlight clicked node
 						node.classList.add('node-highlight');
 
-						// Show corresponding diff
-						if (parsedDiff && parsedDiff.files[index]) {
-							currentFile = parsedDiff.files[index];
-							displayDiff(currentFile);
+						// Show corresponding function's diff
+						if (functionNodes && functionNodes[index]) {
+							const funcNode = functionNodes[index];
+							const file = parsedDiff.files.find(f =>
+								(f.newPath === funcNode.file || f.oldPath === funcNode.file)
+							);
+							if (file) {
+								currentFile = file;
+								displayFunctionDiff(file, funcNode);
+							}
 						}
 					});
 				});
+			}
+
+			// Display diff for a specific function
+			function displayFunctionDiff(file, funcNode) {
+				let html = `<div class="diff-file">`;
+				html += `<div class="diff-file-header">${file.newPath || file.oldPath} :: ${funcNode.name}()</div>`;
+				html += `<div class="diff-lines">`;
+
+				// Find the hunk containing this function
+				const targetHunk = funcNode.hunk;
+				let oldLine = targetHunk.oldStart;
+				let newLine = targetHunk.newStart;
+
+				// Show context around the function (±5 lines)
+				const funcLineIdx = targetHunk.lines.findIndex(l => l.content.includes(funcNode.fullLine.trim()));
+				const startIdx = Math.max(0, funcLineIdx - 5);
+				const endIdx = Math.min(targetHunk.lines.length, funcLineIdx + 30);
+
+				// Adjust line numbers to match the slice
+				for (let i = 0; i < startIdx; i++) {
+					const line = targetHunk.lines[i];
+					if (line.type === 'deletion' || line.type === 'context') oldLine++;
+					if (line.type === 'addition' || line.type === 'context') newLine++;
+				}
+
+				for (let i = startIdx; i < endIdx; i++) {
+					const line = targetHunk.lines[i];
+					const lineClass = line.type;
+					let lineNum = '';
+
+					if (line.type === 'deletion') {
+						lineNum = oldLine++;
+					} else if (line.type === 'addition') {
+						lineNum = newLine++;
+					} else {
+						lineNum = newLine++;
+						oldLine++;
+					}
+
+					// Highlight the function definition line
+					const isTargetLine = i === funcLineIdx ? ' style="background: #264f78 !important;"' : '';
+
+					html += `<div class="diff-line ${lineClass}"${isTargetLine}>`;
+					html += `<span class="line-number">${lineNum}</span>`;
+					html += `<span class="line-content">${escapeHtml(line.content)}</span>`;
+					html += `</div>`;
+				}
+
+				html += `</div></div>`;
+				diffContainer.innerHTML = html;
 			}
 
 			// Display diff for selected file
