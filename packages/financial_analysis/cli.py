@@ -20,7 +20,7 @@ from typer.models import OptionInfo
 from .categories import (
     load_taxonomy_from_db,
 )
-from .categorize import categorize_expenses, prefill_unanimous_groups_from_db
+from .categorize import categorize_expenses
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -281,241 +281,50 @@ def cmd_review_transaction_categories(
     source_account: str | None = None,
     allow_create: bool | None = None,
 ) -> int:
-    """Categorize a CSV, review groups interactively, and persist decisions.
+    """Thin wrapper around ``api.review_categories_from_csv``.
 
-    Flow
-    ----
-    - Load and normalize ``csv_path`` into CTV using the same adapters as
-      :func:`categorize_expenses_cmd`.
-    - Call :func:`financial_analysis.api.categorize_expenses` to obtain initial
-      category suggestions.
-    - Invoke :func:`financial_analysis.api.review_transaction_categories` with
-      ``source_provider``/``source_account`` and ``database_url`` so the user can
-      confirm/override categories per duplicate group and persist them
-      (``category_source='manual'``, ``verified=true``).
-
-
-    UI
-    --
-    Category selection uses a prompt_toolkit completion menu backed by the
-    canonical category list from the database. The predicted category is
-    pre-filled; press Enter to accept it, or press Tab/arrow keys to open and
-    navigate the dropdown and Enter to confirm a different category.
-
-    - The predicted category is pre-filled; press Enter to accept it.
-    - Press Down (↓) at any time to open the dropdown. On an empty input it
-      shows all categories; after typing a prefix it shows only matches.
-    - As you type a strict prefix of a category, the remainder is shown inline
-      as greyed-out "ghost" text. Press Tab to complete the suggestion without
-      submitting; press Enter to complete and submit.
-    - When multiple categories match a prefix, the inline suggestion follows
-      the top candidate (list order). Use Down to open the menu and pick a
-      different match.
-
-    Requirements
-    ------------
-    This review flow requires database access to load the canonical category
-    list (``fa_categories``) and to persist decisions. Provide a connection via
-    ``--database-url`` or set ``DATABASE_URL`` in the environment, and ensure
-    the workspace ``db`` package is installed/available. If unavailable, the
-    command will print a clear error and exit non‑zero (it will not crash at
-    import time).
+    Loads ``.env``, validates required env, then delegates the end‑to‑end flow
+    to the importable API so this command remains a small shell around that
+    logic.
     """
 
-    import csv
     import os
     import sys
-    # No ThreadPoolExecutor here by design: batching is handled inside
-    # `categorize_expenses` via page_size + p_map.
 
-    # Load .env here as a defensive guarantee (in addition to the Typer wrapper
-    # and root callback) so env-dependent checks work even if this function is
-    # called directly.
     load_dotenv(override=False)
     # Ensure library loggers emit at INFO by default so categorize/review logs are visible
     from .logging_setup import configure_logging
 
     configure_logging(None)
 
-    from .api import review_transaction_categories
-    from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
-    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
-
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
         return 1
 
-    # Load CSV → CTV (robust detection: scan small prefix for Enhanced Details token)
     try:
-        with open(csv_path, encoding="utf-8", newline="") as f:
-            head = f.read(8192)
-            f.seek(0)
-            if "Extended Details" in head:
-                # Enhanced Details export (may include a preamble before the header)
-                ctv_items = list(to_ctv_enhanced_details(f))
-            else:
-                reader = csv.DictReader(f)
-                headers_set = set(reader.fieldnames or [])
-                if not headers_set:
-                    raise csv.Error(f"CSV appears to have no header row: {csv_path}")
-                required_headers = {
-                    "Reference",
-                    "Description",
-                    "Amount",
-                    "Date",
-                    "Appears On Your Statement As",
-                }
-                missing = sorted(h for h in required_headers if h not in headers_set)
-                if missing:
-                    raise csv.Error(
-                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
-                        + ", ".join(missing)
-                    )
-                ctv_items = list(to_ctv_standard(reader))
+        from .api import review_categories_from_csv
+
+        review_categories_from_csv(
+            csv_path,
+            database_url=database_url,
+            source_provider=source_provider,
+            source_account=source_account,
+            allow_create=allow_create,
+            on_progress=print,
+        )
+        return 0
+    except ImportError as e:
+        print(f"Error: failed to import review workflow API: {e}", file=sys.stderr)
+        return 1
     except FileNotFoundError:
         print(f"Error: File not found: {csv_path}", file=sys.stderr)
         return 1
     except PermissionError:
         print(f"Error: Permission denied: {csv_path}", file=sys.stderr)
         return 1
-    except csv.Error as e:
-        print(f"Error: Failed to parse CSV: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:  # pragma: no cover - defensive
-        print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
-        return 1
-
-    total = len(ctv_items)
-    # Step 1: Parse
-    print(
-        f"Parsed transactions: count={total} provider={source_provider} "
-        f"account={source_account or '-'}"
-    )
-    if total == 0:
-        print("No transactions to review.")
-        return 0
-
-    # DB-first prefill: resolve groups that have a unanimous DB category
-    try:
-        prefilled_positions, prefilled_groups = prefill_unanimous_groups_from_db(
-            ctv_items,
-            database_url=database_url,
-            source_provider=source_provider,
-            source_account=source_account,
-        )
-    except Exception as e:
-        print(f"Error: DB prefill failed: {e}", file=sys.stderr)
-        return 1
-
-    # Build unresolved subset in original order
-    unresolved_indices: list[int] = [i for i in range(total) if i not in (prefilled_positions)]
-    unresolved_ctv: list = [ctv_items[i] for i in unresolved_indices]
-
-    # When everything was resolved from DB, jump straight to the (no-op) review
-    # with an empty list so the pre-review summary/exit path remains familiar.
-    if len(unresolved_ctv) == 0:
-        try:
-            review_transaction_categories(
-                [],
-                source_provider=source_provider,
-                source_account=source_account,
-                database_url=database_url,
-                prefilled_groups=prefilled_groups,
-                allow_create=allow_create,
-            )
-        except Exception as e:
-            print(f"Error: review failed: {e}", file=sys.stderr)
-            return 1
-        return 0
-
-    # Load the canonical taxonomy from the DB (uses provided database_url)
-    try:
-        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
-    except Exception as e:
-        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
-        return 1
-
-    # Step 4: Remaining → LLM batching (pages of 10 via p_map)
-    from .cache import compute_dataset_id as _compute_dataset_id
-    from .categorize import PAGE_SIZE_DEFAULT
-
-    page_size = PAGE_SIZE_DEFAULT
-    approx_groups = len(unresolved_ctv)  # estimate; exact count computed inside categorize
-    approx_pages = (approx_groups + page_size - 1) // page_size
-    dataset_id = _compute_dataset_id(
-        ctv_items=unresolved_ctv, source_provider=source_provider, taxonomy=taxonomy
-    )
-    print(
-        "LLM: unresolved_items="
-        f"{len(unresolved_ctv)} groups≈{approx_groups} pages≈{approx_pages} "
-        f"page_size={page_size} dataset_id={dataset_id[:8]}"
-    )
-
-    try:
-        # Categorize only unresolved items using dataset-level cache. This defers
-        # all batching to `categorize_expenses` (pages of 10 via p_map).
-        all_unresolved_suggestions = categorize_expenses(
-            transactions=unresolved_ctv,
-            taxonomy=taxonomy,
-            source_provider=source_provider,
-            page_size=page_size,
-        )
-    except Exception as e:
-        print(f"Error: categorization failed: {e}", file=sys.stderr)
-        return 1
-
-    # Sanity check: results must align with unresolved inputs
-    if len(all_unresolved_suggestions) != len(unresolved_ctv):
-        print(
-            "Error: internal alignment error (unresolved results size mismatch)",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Auto-apply high-confidence suggestions (Issue #94 follow-up):
-    # Persist any suggestion with effective confidence > 0.7. Only update rows
-    # that are currently unverified to avoid clobbering operator-reviewed categories.
-    applied_hc = 0
-    try:
-        from db.client import session_scope
-        from .persistence import auto_persist_high_confidence
-
-        with session_scope(database_url=database_url) as session:
-            applied = auto_persist_high_confidence(
-                session,
-                source_provider=source_provider,
-                source_account=source_account,
-                suggestions=all_unresolved_suggestions,
-                min_confidence=0.7,
-            )
-        applied_hc = int(applied)
-        if applied_hc:
-            print(f"Auto-applied {applied_hc} high-confidence suggestions (> 0.7).")
-    except Exception as e:
-        print(
-            f"Warning: failed to auto-apply high-confidence suggestions: {e}",
-            file=sys.stderr,
-        )
-
-    # Begin review for unresolved groups only (pass only the unresolved subset
-    # so the interactive UI processes fewer groups as intended).
-    try:
-        review_transaction_categories(
-            all_unresolved_suggestions,
-            source_provider=source_provider,
-            source_account=source_account,
-            database_url=database_url,
-            prefilled_groups=prefilled_groups,
-            allow_create=allow_create,
-        )
-    except Exception as e:
+    except Exception as e:  # pragma: no cover - defensive umbrella
         print(f"Error: review failed: {e}", file=sys.stderr)
         return 1
-
-    # Final wrap line to summarize the session at a glance
-    print(f"Done: prefilled_groups={prefilled_groups} auto_applied_items={applied_hc}")
-
-    return 0
 
 
 # ---- Typer-based console interface -------------------------------------------

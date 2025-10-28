@@ -294,7 +294,7 @@ def _categorize_page(
             _logger.info(
                 "categorize_expenses:page_done page_index=%d num_transactions=%d latency_ms=%.2f",
                 page_index,
-                count,
+                len(out),
                 dt_ms,
             )
             return PageResult(page_index=page_index, results=out)
@@ -471,10 +471,10 @@ def prefill_unanimous_groups_from_db(
             prefilled_positions.update(positions)
             prefilled_groups += 1
 
-            # Log per-group application with normalized merchant key (truncated for brevity)
-            key_short = key if len(key) <= 40 else (key[:37] + "…")
+            # Log per-group application with normalized merchant key (ASCII, explicit quoting)
+            key_short = key if len(key) <= 40 else (key[:37] + "...")
             _logger.info(
-                "prefill:applied key=%r size=%d category=%s",
+                'prefill:applied key="%s" size=%d category=%s',
                 key_short,
                 len(positions),
                 unanimous,
@@ -577,7 +577,7 @@ def categorize_expenses(
         enum and a concise hierarchy section in the prompt so the model prefers
         specific child categories and otherwise falls back to parents.
     page_size:
-        Page size for batching requests (default 100). Must be a positive
+        Page size for batching requests (default 10). Must be a positive
         integer when ``transactions`` is not empty.
 
     Returns

@@ -23,6 +23,7 @@ from .models import (
     TransactionPartitions,
     Transactions,
 )
+from .workflows.review_flow import review_categories_from_csv  # noqa: F401  (re-export)
 
 # DB and persistence imports are intentionally local within functions to keep
 # import-time costs low for consumers that don't use the DB-backed review flow.
