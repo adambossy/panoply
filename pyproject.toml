@@ -25,6 +25,8 @@ dev = [
 ]
 lint = [
   "ruff",
+  # Static dead code detector
+  "deadcode",
 ]
 typecheck = [
   "mypy",
@@ -49,3 +51,13 @@ members = ["packages/*", "libs/*"]
 # Intentionally omit a build backend at the workspace root so `uv` doesn't try to
 # build/install a root distribution. Workspace packages live under `packages/*` and
 # `libs/*` and have their own build systems.
+
+# Tool configuration
+
+[tool.deadcode]
+# Skip generated migrations and test code when looking for unused names.
+exclude = [
+  ".venv",
+  "tests",
+  "libs/db/alembic/versions",
+]

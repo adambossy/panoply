@@ -48,6 +48,9 @@ uv run ruff format .
 # Type check
 uv run mypy .
 
+# Dead code detector
+uv run deadcode .
+
 # Run all pre-commit hooks manually
 uv run pre-commit run --all-files
 ```
@@ -134,6 +137,7 @@ libs/pmap/                      # Parallel mapping utility (currently empty stub
 ### Code Style
 - Python 3.12 (see `.python-version`)
 - Ruff for linting and formatting (config: `ruff.toml`)
+- Dead code checks via `deadcode` (config in `pyproject.toml`)
 - Type hints preferred but not strictly enforced (mypy config: `mypy.ini`)
 - Use Pydantic for DTOs and schemas
 

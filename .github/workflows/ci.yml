@@ -42,6 +42,30 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
+  deadcode:
+    name: Dead code • Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace dependencies (locked)
+        run: uv sync --locked
+
+      - name: Dead code check (deadcode)
+        run: uv run deadcode .
+
   typecheck:
     name: Typecheck • Ubuntu
     runs-on: ubuntu-latest
