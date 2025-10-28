@@ -37,8 +37,6 @@ from .models import CategorizedTransaction, LlmDecision, Transactions
 # ---- Tunables (private) ------------------------------------------------------
 
 _PAGE_SIZE_DEFAULT: int = 10
-# Public alias for the default page size; prefer importing this from callers
-PAGE_SIZE_DEFAULT: int = _PAGE_SIZE_DEFAULT
 _CONCURRENCY: int = 4
 _MAX_ATTEMPTS: int = 3
 _BACKOFF_SCHEDULE_SEC: tuple[float, ...] = (0.5, 2.0)

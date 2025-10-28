@@ -8,7 +8,7 @@ re‑export stable entry points.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -69,7 +69,6 @@ def review_categories_from_csv(
     source_provider: str = "amex",
     source_account: str | None = None,
     allow_create: bool | None = None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> list[CategorizedTransaction]:
     """End-to-end: CSV → CTV → prefill → categorize unresolved → review+persist.
 
@@ -84,8 +83,6 @@ def review_categories_from_csv(
     allow_create:
         When ``True`` (default), the review UI allows creating a new category
         during selection. ``None`` preserves the upstream default.
-    on_progress:
-        Optional callable to receive short status lines (e.g., ``print``).
 
     Returns
     -------
@@ -97,15 +94,12 @@ def review_categories_from_csv(
 
     # CSV → CTV
     ctv_items = _read_ctv_from_csv(str(csv_path))
-    if on_progress:
-        # Only print existing values: count and provided scope identifiers
-        acct = source_account if source_account is not None else "-"
-        on_progress(
-            f"Parsed transactions: count={len(ctv_items)} provider={source_provider} account={acct}"
-        )
+    print(
+        f"Parsed transactions: count={len(ctv_items)} "
+        f"provider={source_provider} account={source_account}"
+    )
     if not ctv_items:
-        if on_progress:
-            on_progress("No transactions to review.")
+        print("No transactions to review.")
         return []
 
     # DB‑first prefill
@@ -115,11 +109,9 @@ def review_categories_from_csv(
         source_provider=source_provider,
         source_account=source_account,
     )
-    if on_progress and (prefilled_groups or prefilled_positions):
-        on_progress(
-            "Prefill: groups_applied="
-            f"{prefilled_groups} positions_assigned={len(prefilled_positions)}"
-        )
+    print(
+        f"Prefill: groups_applied={prefilled_groups} positions_assigned={len(prefilled_positions)}"
+    )
 
     # Build unresolved subset in original order
     unresolved_indices: list[int] = [
@@ -141,9 +133,7 @@ def review_categories_from_csv(
     # Taxonomy for schema + prompt context
     taxonomy = load_taxonomy_from_db(database_url=database_url)
 
-    if on_progress:
-        # Do not invent estimates; report only the unresolved size already known
-        on_progress(f"LLM: unresolved_items={len(unresolved_ctv)}")
+    print(f"LLM: unresolved_items={len(unresolved_ctv)}")
 
     # Categorize unresolved only (page cache keyed by dataset_id inside impl)
     suggestions = categorize_expenses(
@@ -163,8 +153,7 @@ def review_categories_from_csv(
             suggestions=suggestions,
             min_confidence=0.7,
         )
-    if applied and on_progress:
-        on_progress(f"Auto-applied {applied} high-confidence suggestions (> 0.7).")
+    print(f"Auto-applied {applied} high-confidence suggestions (> 0.7).")
 
     # Interactive review of the low-confidence remainder
     result = review_transaction_categories(
@@ -175,8 +164,7 @@ def review_categories_from_csv(
         prefilled_groups=prefilled_groups,
         allow_create=allow_create,
     )
-    if on_progress:
-        on_progress(f"Done: prefilled_groups={prefilled_groups} auto_applied_items={applied or 0}")
+    print(f"Done: prefilled_groups={prefilled_groups} auto_applied_items={applied or 0}")
     return result
 
 

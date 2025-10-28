@@ -292,10 +292,6 @@ def cmd_review_transaction_categories(
     import sys
 
     load_dotenv(override=False)
-    # Ensure library loggers emit at INFO by default so categorize/review logs are visible
-    from .logging_setup import configure_logging
-
-    configure_logging(None)
 
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
@@ -310,7 +306,6 @@ def cmd_review_transaction_categories(
             source_provider=source_provider,
             source_account=source_account,
             allow_create=allow_create,
-            on_progress=print,
         )
         return 0
     except ImportError as e:
