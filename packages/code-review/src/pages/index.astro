@@ -79,6 +79,126 @@
 
 			.diff-pane {
 				background: #1e1e1e;
+				border-right: 1px solid #3e3e42;
+			}
+
+			.call-hierarchy-pane {
+				flex: 0 0 400px;
+				background: #1e1e1e;
+			}
+
+			.call-hierarchy-content {
+				font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+				font-size: 0.875rem;
+			}
+
+			.target-symbol {
+				padding: 1rem;
+				border-bottom: 1px solid #3e3e42;
+				background: #2d2d30;
+			}
+
+			.target-symbol h3 {
+				color: #4ec9b0;
+				font-size: 1rem;
+				margin-bottom: 0.5rem;
+			}
+
+			.target-symbol code {
+				color: #d4d4d4;
+				font-size: 0.8rem;
+			}
+
+			.hierarchy-section {
+				margin: 1rem 0;
+			}
+
+			.hierarchy-section-header {
+				padding: 0.75rem 1rem;
+				background: #2d2d30;
+				border: none;
+				color: #d4d4d4;
+				font-size: 0.9rem;
+				font-weight: 600;
+				cursor: pointer;
+				width: 100%;
+				text-align: left;
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+
+			.hierarchy-section-header:hover {
+				background: #3e3e42;
+			}
+
+			.call-tree {
+				list-style: none;
+				padding: 0;
+				margin: 0;
+			}
+
+			.call-site {
+				border-bottom: 1px solid #3e3e42;
+			}
+
+			.call-link {
+				display: block;
+				padding: 0.75rem 1rem;
+				background: none;
+				border: none;
+				color: #d4d4d4;
+				text-align: left;
+				cursor: pointer;
+				width: 100%;
+				transition: background 0.2s;
+			}
+
+			.call-link:hover {
+				background: #2d2d30;
+			}
+
+			.symbol-name {
+				color: #4ec9b0;
+				font-weight: 600;
+				display: block;
+				margin-bottom: 0.25rem;
+			}
+
+			.location {
+				color: #858585;
+				font-size: 0.8rem;
+			}
+
+			.context-code {
+				background: #1a1a1a;
+				padding: 0.5rem 1rem;
+				margin: 0.5rem 1rem;
+				border-left: 3px solid #0e639c;
+				font-size: 0.8rem;
+				color: #cccccc;
+				white-space: pre-wrap;
+				overflow-x: auto;
+			}
+
+			.call-type-badge {
+				display: inline-block;
+				padding: 0.2rem 0.5rem;
+				background: #0e639c;
+				color: white;
+				border-radius: 3px;
+				font-size: 0.7rem;
+				margin-left: 0.5rem;
+			}
+
+			.empty-state {
+				padding: 2rem;
+				text-align: center;
+				color: #858585;
+			}
+
+			.selected-text {
+				background: #264f78 !important;
 			}
 
 			#mermaid-diagram {
@@ -241,6 +361,15 @@
 						</div>
 					</div>
 				</div>
+
+				<div class="pane call-hierarchy-pane">
+					<div class="pane-header">Call Hierarchy</div>
+					<div class="pane-content" style="padding: 0;">
+						<div id="call-hierarchy-content" class="call-hierarchy-content">
+							<div class="empty-state">Select code in the diff to view call hierarchy</div>
+						</div>
+					</div>
+				</div>
 			</div>
 		</div>
 
@@ -264,12 +393,15 @@
 
 			let parsedDiff = null;
 			let currentDiagram = null;
+			let selectedCode = null;
+			let currentFile = null;
 
 			// File input handling
 			const fileInput = document.getElementById('diff-file');
 			const fileName = document.getElementById('file-name');
 			const mermaidContainer = document.getElementById('mermaid-diagram');
 			const diffContainer = document.getElementById('diff-content');
+			const callHierarchyContainer = document.getElementById('call-hierarchy-content');
 
 			fileInput.addEventListener('change', async (e) => {
 				const file = e.target.files[0];
@@ -438,7 +570,8 @@
 
 						// Show corresponding diff
 						if (parsedDiff && parsedDiff.files[index]) {
-							displayDiff(parsedDiff.files[index]);
+							currentFile = parsedDiff.files[index];
+							displayDiff(currentFile);
 						}
 					});
 				});
@@ -484,6 +617,183 @@
 				div.textContent = text;
 				return div.innerHTML;
 			}
+
+			// Setup text selection handler for call hierarchy
+			function setupTextSelection() {
+				document.addEventListener('mouseup', () => {
+					const selection = window.getSelection();
+					const selectedText = selection.toString().trim();
+
+					if (selectedText && currentFile) {
+						// Get the selected element to determine context
+						const range = selection.getRangeAt(0);
+						const container = range.commonAncestorContainer;
+						const lineElement = container.parentElement?.closest('.diff-line');
+
+						if (lineElement) {
+							selectedCode = {
+								text: selectedText,
+								file: currentFile,
+								element: lineElement
+							};
+
+							// Extract and display call hierarchy
+							const hierarchy = extractCallHierarchy(selectedText, currentFile);
+							renderCallHierarchy(hierarchy);
+						}
+					}
+				});
+			}
+
+			// Extract call hierarchy from selected code
+			function extractCallHierarchy(selectedText, file) {
+				// Simple heuristic-based function extraction
+				const functionPatterns = [
+					/function\s+(\w+)/,          // JavaScript function
+					/const\s+(\w+)\s*=/,         // JavaScript const/arrow function
+					/def\s+(\w+)/,               // Python function
+					/func\s+(\w+)/,              // Go function
+					/(\w+)\s*\(/,                // General function call
+				];
+
+				let functionName = null;
+				for (const pattern of functionPatterns) {
+					const match = selectedText.match(pattern);
+					if (match) {
+						functionName = match[1] || match[0].replace(/\s*\(.*/, '');
+						break;
+					}
+				}
+
+				if (!functionName) {
+					return null;
+				}
+
+				// Search for calls to this function (incoming) and calls from this function (outgoing)
+				const incomingCalls = [];
+				const outgoingCalls = [];
+
+				// Search all files in the diff
+				parsedDiff.files.forEach(searchFile => {
+					searchFile.hunks.forEach(hunk => {
+						hunk.lines.forEach((line, lineIdx) => {
+							const content = line.content;
+
+							// Check for calls to our function (incoming)
+							const callPattern = new RegExp(`\\b${functionName}\\s*\\(`, 'g');
+							if (callPattern.test(content) && !content.includes(`function ${functionName}`) && !content.includes(`def ${functionName}`)) {
+								incomingCalls.push({
+									file: searchFile.newPath || searchFile.oldPath,
+									line: lineIdx + hunk.newStart,
+									content: content.trim(),
+									type: line.type
+								});
+							}
+
+							// If this is our function, look for outgoing calls
+							if (searchFile === file) {
+								// Extract function calls from the content
+								const outgoingPattern = /(\w+)\s*\(/g;
+								let match;
+								while ((match = outgoingPattern.exec(content)) !== null) {
+									const calledFunction = match[1];
+									// Exclude common keywords and our own function
+									if (calledFunction !== functionName &&
+										!['if', 'for', 'while', 'return', 'function', 'const', 'let', 'var'].includes(calledFunction)) {
+										outgoingCalls.push({
+											file: searchFile.newPath || searchFile.oldPath,
+											line: lineIdx + hunk.newStart,
+											content: content.trim(),
+											functionName: calledFunction,
+											type: line.type
+										});
+									}
+								}
+							}
+						});
+					});
+				});
+
+				return {
+					targetFunction: functionName,
+					signature: selectedText.split('\n')[0].trim(),
+					incomingCalls: incomingCalls.slice(0, 10), // Limit to 10
+					outgoingCalls: [...new Map(outgoingCalls.map(c => [c.functionName, c])).values()].slice(0, 10)
+				};
+			}
+
+			// Render call hierarchy in the panel
+			function renderCallHierarchy(hierarchy) {
+				if (!hierarchy) {
+					callHierarchyContainer.innerHTML = '<div class="empty-state">No function detected in selection</div>';
+					return;
+				}
+
+				let html = '<div class="target-symbol">';
+				html += `<h3>${escapeHtml(hierarchy.targetFunction)}</h3>`;
+				html += `<code>${escapeHtml(hierarchy.signature)}</code>`;
+				html += '</div>';
+
+				// Incoming calls section
+				html += '<div class="hierarchy-section">';
+				html += `<button class="hierarchy-section-header" onclick="toggleSection('incoming')">`;
+				html += `<span>▼</span> Incoming Calls (${hierarchy.incomingCalls.length})`;
+				html += '</button>';
+				html += '<div id="incoming-section" class="call-tree">';
+
+				if (hierarchy.incomingCalls.length === 0) {
+					html += '<div class="empty-state" style="padding: 1rem;">No incoming calls found</div>';
+				} else {
+					hierarchy.incomingCalls.forEach(call => {
+						html += '<div class="call-site">';
+						html += '<div class="call-link">';
+						html += `<span class="symbol-name">${escapeHtml(call.file)}</span>`;
+						html += `<span class="location">Line ${call.line}</span>`;
+						html += `<span class="call-type-badge">${call.type}</span>`;
+						html += '</div>';
+						html += `<pre class="context-code">${escapeHtml(call.content)}</pre>`;
+						html += '</div>';
+					});
+				}
+
+				html += '</div></div>';
+
+				// Outgoing calls section
+				html += '<div class="hierarchy-section">';
+				html += `<button class="hierarchy-section-header" onclick="toggleSection('outgoing')">`;
+				html += `<span>▼</span> Outgoing Calls (${hierarchy.outgoingCalls.length})`;
+				html += '</button>';
+				html += '<div id="outgoing-section" class="call-tree">';
+
+				if (hierarchy.outgoingCalls.length === 0) {
+					html += '<div class="empty-state" style="padding: 1rem;">No outgoing calls found</div>';
+				} else {
+					hierarchy.outgoingCalls.forEach(call => {
+						html += '<div class="call-site">';
+						html += '<div class="call-link">';
+						html += `<span class="symbol-name">${escapeHtml(call.functionName)}</span>`;
+						html += `<span class="location">${escapeHtml(call.file)}:${call.line}</span>`;
+						html += '</div>';
+						html += `<pre class="context-code">${escapeHtml(call.content)}</pre>`;
+						html += '</div>';
+					});
+				}
+
+				html += '</div></div>';
+
+				callHierarchyContainer.innerHTML = html;
+			}
+
+			// Toggle section visibility
+			window.toggleSection = function(sectionId) {
+				const section = document.getElementById(`${sectionId}-section`);
+				if (section) {
+					section.style.display = section.style.display === 'none' ? 'block' : 'none';
+				}
+			};
+
+			// Initialize text selection handler
+			setupTextSelection();
 		</script>
 	</body>
 </html>
