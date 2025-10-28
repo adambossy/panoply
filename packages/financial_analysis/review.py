@@ -824,7 +824,11 @@ def review_transaction_categories(
         # Summary before review starts
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         total_prefilled = (prefilled_groups or 0) + prefilled_applied
-        print_fn(_format_pre_review_summary(prefilled_groups=total_prefilled, remaining_by_root=gated_rem_by_root))
+        print_fn(
+            _format_pre_review_summary(
+                prefilled_groups=total_prefilled, remaining_by_root=gated_rem_by_root
+            )
+        )
 
         for root in group_roots:
             idxs = groups_map[root]
