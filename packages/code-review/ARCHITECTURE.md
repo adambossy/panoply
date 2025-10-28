@@ -37,10 +37,32 @@ The current implementation is a **monolithic single-page application** with the 
   - Maintains selection state (highlight management)
   - Coordinates between diagram and diff pane
 
-#### 6. **Application State**
-- Two global variables:
+#### 6. **Call Hierarchy Analyzer** (NEW FEATURE)
+- **CallHierarchyExtractor** (to be implemented)
+  - Extracts function/method definitions from selected code
+  - Traces function calls (both incoming and outgoing)
+  - Builds call tree (who calls this function, what it calls)
+  - Pattern: Text selection → Parse → Extract symbols → Build hierarchy
+
+**Prototype Implementation:**
+```javascript
+// extractCallHierarchy(selectedText, file)
+//   - Parse selected code for function definitions
+//   - Search entire diff for function calls
+//   - Build bidirectional call graph
+//   - Returns: { callers: [...], callees: [...] }
+
+// renderCallHierarchy(hierarchy)
+//   - Display as tree view or mini-diagram
+//   - Show function signatures + locations
+//   - Click to jump to definition/call site
+```
+
+#### 7. **Application State**
+- Three global variables:
   - `parsedDiff`: Structured diff data
   - `currentDiagram`: Mermaid syntax string
+  - `selectedCode`: Currently selected code + metadata (file, line range)
 - State is mutable and lives in closure scope
 
 ---
@@ -93,6 +115,25 @@ The current implementation is a **monolithic single-page application** with the 
 ┌─────────────────┐     ┌───────────────┐
 │ User clicks node│────▶│ displayDiff() │
 └─────────────────┘     └───────────────┘
+                                │
+                                ▼
+                      ┌──────────────────────┐
+                      │ User selects code    │
+                      │ (text selection)     │
+                      └──────────┬───────────┘
+                                 │
+                                 ▼
+                      ┌──────────────────────────┐
+                      │ extractCallHierarchy()   │
+                      │ - Parse function defs    │
+                      │ - Search for calls       │
+                      └──────────┬───────────────┘
+                                 │
+                                 ▼
+                      ┌──────────────────────────┐
+                      │ renderCallHierarchy()    │
+                      │ Display in side panel    │
+                      └──────────────────────────┘
 ```
 
 ---
@@ -214,6 +255,69 @@ interface ASTParser {
 class TypeScriptASTParser implements ASTParser {}
 class PythonASTParser implements ASTParser {}
 class GoASTParser implements ASTParser {}
+
+// analysis/CallHierarchyAnalyzer.ts (NEW COMPONENT)
+interface CallHierarchy {
+  targetSymbol: Symbol;
+  incomingCalls: CallSite[];  // Who calls this?
+  outgoingCalls: CallSite[];  // What does this call?
+}
+
+interface Symbol {
+  name: string;
+  type: 'function' | 'method' | 'class' | 'variable';
+  signature: string;
+  location: Location;
+  scope: 'global' | 'local' | 'class';
+}
+
+interface CallSite {
+  symbol: Symbol;
+  location: Location;
+  context: string; // Surrounding code
+  callType: 'direct' | 'indirect' | 'async' | 'callback';
+}
+
+interface Location {
+  file: string;
+  line: number;
+  column: number;
+  range: [number, number]; // start/end offset in file
+}
+
+class CallHierarchyAnalyzer {
+  constructor(
+    private readonly astParser: ASTParser,
+    private readonly symbolTable: SymbolTable
+  ) {}
+
+  // Extract hierarchy for selected code
+  analyze(selection: CodeSelection, diff: ParsedDiff): CallHierarchy;
+
+  // Find all places this function is called
+  findIncomingCalls(symbol: Symbol, diff: ParsedDiff): CallSite[];
+
+  // Find all functions this function calls
+  findOutgoingCalls(symbol: Symbol, ast: AST): CallSite[];
+
+  // Build symbol table from diff
+  private buildSymbolTable(diff: ParsedDiff): SymbolTable;
+
+  // Extract function/method from selection
+  private extractSymbol(selection: CodeSelection): Symbol;
+
+  // Search for function calls across all files
+  private searchCallSites(symbolName: string, files: DiffFile[]): CallSite[];
+}
+
+// Symbol resolution for cross-file analysis
+class SymbolTable {
+  private symbols: Map<string, Symbol[]>; // key: symbol name, value: all definitions
+
+  register(symbol: Symbol): void;
+  lookup(name: string, context: Location): Symbol | null;
+  resolve(callExpr: string, context: Location): Symbol | null;
+}
 ```
 
 #### **3. Visualization Module** (`src/lib/visualization/`)
@@ -298,6 +402,88 @@ const FileExplorer: React.FC = () => {
   // Tree view with search/filter
   return <TreeView data={files} onSelect={handleFileSelect} />;
 };
+
+// components/CallHierarchyPanel.tsx (NEW COMPONENT)
+interface CallHierarchyPanelProps {
+  hierarchy: CallHierarchy | null;
+  onNavigate: (location: Location) => void;
+}
+
+const CallHierarchyPanel: React.FC<CallHierarchyPanelProps> = ({ hierarchy, onNavigate }) => {
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['incoming', 'outgoing']));
+
+  if (!hierarchy) {
+    return (
+      <div className="empty-state">
+        <p>Select code to view call hierarchy</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="call-hierarchy-panel">
+      <div className="target-symbol">
+        <h3>{hierarchy.targetSymbol.name}</h3>
+        <code className="signature">{hierarchy.targetSymbol.signature}</code>
+      </div>
+
+      <div className="hierarchy-section">
+        <button onClick={() => toggleSection('incoming')}>
+          {expandedSections.has('incoming') ? '▼' : '▶'} Incoming Calls ({hierarchy.incomingCalls.length})
+        </button>
+        {expandedSections.has('incoming') && (
+          <CallTree
+            calls={hierarchy.incomingCalls}
+            onNavigate={onNavigate}
+            direction="incoming"
+          />
+        )}
+      </div>
+
+      <div className="hierarchy-section">
+        <button onClick={() => toggleSection('outgoing')}>
+          {expandedSections.has('outgoing') ? '▼' : '▶'} Outgoing Calls ({hierarchy.outgoingCalls.length})
+        </button>
+        {expandedSections.has('outgoing') && (
+          <CallTree
+            calls={hierarchy.outgoingCalls}
+            onNavigate={onNavigate}
+            direction="outgoing"
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+// components/CallTree.tsx
+interface CallTreeProps {
+  calls: CallSite[];
+  onNavigate: (location: Location) => void;
+  direction: 'incoming' | 'outgoing';
+}
+
+const CallTree: React.FC<CallTreeProps> = ({ calls, onNavigate, direction }) => {
+  return (
+    <ul className="call-tree">
+      {calls.map((call, idx) => (
+        <li key={idx} className="call-site">
+          <button
+            className="call-link"
+            onClick={() => onNavigate(call.location)}
+          >
+            <span className="symbol-name">{call.symbol.name}</span>
+            <span className="location">
+              {call.location.file}:{call.location.line}
+            </span>
+          </button>
+          <pre className="context">{call.context}</pre>
+          <span className="call-type-badge">{call.callType}</span>
+        </li>
+      ))}
+    </ul>
+  );
+};
 ```
 
 #### **5. State Management** (`src/state/`)
@@ -315,11 +501,18 @@ interface AppState {
     layout: LayoutAlgorithm;
     filters: GraphFilters;
   };
+  callHierarchy: {
+    current: CallHierarchy | null;
+    selection: CodeSelection | null;
+    loading: boolean;
+    history: CallHierarchy[]; // Navigation history
+  };
   ui: {
     selectedFile: string | null;
     selectedNode: string | null;
-    splitPaneSize: [number, number];
+    splitPaneSize: [number, number, number]; // [diagram, diff, call hierarchy]
     theme: 'light' | 'dark';
+    showCallHierarchy: boolean;
   };
   settings: UserSettings;
 }
@@ -329,11 +522,19 @@ type Action =
   | { type: 'LOAD_DIFF'; payload: string }
   | { type: 'PARSE_DIFF_SUCCESS'; payload: ParsedDiff }
   | { type: 'SELECT_FILE'; payload: string }
-  | { type: 'UPDATE_GRAPH_FILTERS'; payload: Partial<GraphFilters> };
+  | { type: 'UPDATE_GRAPH_FILTERS'; payload: Partial<GraphFilters> }
+  | { type: 'SELECT_CODE'; payload: CodeSelection }
+  | { type: 'ANALYZE_CALL_HIERARCHY_START' }
+  | { type: 'ANALYZE_CALL_HIERARCHY_SUCCESS'; payload: CallHierarchy }
+  | { type: 'NAVIGATE_TO_CALL_SITE'; payload: Location }
+  | { type: 'TOGGLE_CALL_HIERARCHY_PANEL' };
 
 // Selectors
 const selectVisibleFiles = (state: AppState) =>
   state.diff.parsed?.files.filter(f => matchesFilters(f, state.graph.filters));
+
+const selectCanAnalyzeCallHierarchy = (state: AppState) =>
+  state.callHierarchy.selection !== null && !state.callHierarchy.loading;
 ```
 
 #### **6. API Layer** (`backend/`)
@@ -348,12 +549,31 @@ POST   /api/diff/github           // Fetch from GitHub PR
 POST   /api/analysis/dependencies // Deep dependency analysis
 POST   /api/analysis/complexity   // Compute complexity metrics
 POST   /api/analysis/impact       // Impact analysis (blast radius)
+POST   /api/analysis/call-hierarchy // Extract call hierarchy for selection
 
 // backend/services/
 class DiffService {
   async parse(diffText: string): Promise<ParsedDiff>;
   async analyze(diff: ParsedDiff): Promise<DependencyGraph>;
   async cache(id: string, data: ParsedDiff): Promise<void>;
+}
+
+class CallHierarchyService {
+  constructor(
+    private readonly analyzer: CallHierarchyAnalyzer,
+    private readonly cache: CacheService
+  ) {}
+
+  async analyze(
+    diffId: string,
+    selection: CodeSelection
+  ): Promise<CallHierarchy>;
+
+  // Precompute call hierarchies for all functions in diff (background job)
+  async precomputeAll(diffId: string): Promise<void>;
+
+  // Get cached hierarchy if available
+  async getCached(diffId: string, symbolId: string): Promise<CallHierarchy | null>;
 }
 
 class GitHubService {
@@ -487,6 +707,103 @@ class ReportGenerator {
   // - Test coverage impact
   // - Dependency changes
 }
+```
+
+### 8. **Call Hierarchy Features** (NEW)
+```typescript
+// Advanced call hierarchy capabilities
+class EnhancedCallHierarchyAnalyzer extends CallHierarchyAnalyzer {
+  // Multi-level call chains (A → B → C → D)
+  async traceCallChain(
+    symbol: Symbol,
+    maxDepth: number = 5
+  ): Promise<CallChain>;
+
+  // Find indirect callers (through callbacks, promises, events)
+  async findIndirectCallers(
+    symbol: Symbol,
+    diff: ParsedDiff
+  ): Promise<CallSite[]>;
+
+  // Cross-language call tracking (e.g., Python calling JS via API)
+  async analyzeCrossLanguageCalls(
+    symbol: Symbol,
+    diff: ParsedDiff
+  ): Promise<CrossLanguageCall[]>;
+
+  // Identify unused functions (no incoming calls)
+  async findDeadCode(diff: ParsedDiff): Promise<Symbol[]>;
+
+  // Call frequency analysis (hot paths)
+  async analyzeCallFrequency(
+    diff: ParsedDiff,
+    executionTraces?: Trace[]
+  ): Promise<CallFrequencyMap>;
+}
+
+interface CallChain {
+  path: Symbol[];
+  depth: number;
+  type: 'sync' | 'async' | 'mixed';
+}
+
+interface CrossLanguageCall {
+  caller: Symbol;
+  callee: Symbol;
+  bridge: 'http' | 'grpc' | 'ffi' | 'ipc';
+  endpoint?: string;
+}
+
+// Interactive features
+class CallHierarchyNavigator {
+  // Navigate call tree with keyboard
+  nextCall(): void;
+  previousCall(): void;
+  goToParent(): void;
+  expandAll(): void;
+  collapseAll(): void;
+
+  // Search within hierarchy
+  search(query: string): CallSite[];
+  filter(predicate: (call: CallSite) => boolean): CallSite[];
+
+  // Visualize as mini-diagram
+  generateHierarchyDiagram(hierarchy: CallHierarchy): MermaidGraph;
+}
+
+// Performance optimization
+class CallHierarchyCache {
+  // Incremental updates when code changes
+  async update(
+    oldHierarchy: CallHierarchy,
+    changes: DiffDelta
+  ): Promise<CallHierarchy>;
+
+  // Background precomputation
+  async warmCache(diff: ParsedDiff): Promise<void>;
+
+  // Invalidate affected hierarchies on edit
+  invalidate(changedSymbols: Symbol[]): void;
+}
+```
+
+**UI Integration:**
+```typescript
+// Three-pane layout: Diagram | Diff | Call Hierarchy
+<Layout>
+  <DiagramPane /> {/* Left */}
+  <DiffViewer
+    onTextSelect={(selection) => dispatch({ type: 'SELECT_CODE', payload: selection })}
+  /> {/* Center */}
+  <CallHierarchyPanel /> {/* Right - toggleable */}
+</Layout>
+
+// Keyboard shortcuts
+- `Ctrl+H`: Toggle call hierarchy panel
+- `Ctrl+I`: Show incoming calls
+- `Ctrl+O`: Show outgoing calls
+- `F12`: Go to definition
+- `Shift+F12`: Find all references (incoming calls)
 ```
 
 ---
