@@ -87,8 +87,16 @@ def test_e2e_review_categories_from_csv_persists_expected(
     monkeypatch.setattr(categorize_mod, "OpenAI", lambda: OpenAIStub(_decide_category, calls))
 
     # -------------------------
-    # Execute the end-to-end workflow
+    # Execute the end-to-end workflow (twice to assert idempotency)
     # -------------------------
+    _ = review_categories_from_csv(
+        csv_path,
+        database_url=db_url,
+        source_provider="amex",
+        source_account=None,
+        allow_create=False,
+        on_progress=lambda s: None,  # keep test output clean
+    )
     _ = review_categories_from_csv(
         csv_path,
         database_url=db_url,

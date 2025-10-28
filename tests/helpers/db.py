@@ -75,8 +75,14 @@ def seed_full_taxonomy_from_json(*, database_url: str, json_path: Path) -> None:
 
 
 def _clear_categories(session: Session) -> None:
-    # Portable clear for SQLite without TRUNCATE
-    session.query(FaCategory).delete()
+    """Clear taxonomy rows in FK-safe order (children first, then parents)."""
+    # Delete children first to satisfy self-referential FK
+    session.query(FaCategory).filter(FaCategory.parent_code.isnot(None)).delete(
+        synchronize_session=False
+    )
+    session.query(FaCategory).filter(FaCategory.parent_code.is_(None)).delete(
+        synchronize_session=False
+    )
     session.flush()
 
 
