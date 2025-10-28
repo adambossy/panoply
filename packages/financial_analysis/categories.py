@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 # Name normalization/validation
 # ---------------------------
 
-_ALLOWED_RE = re.compile(r"^[A-Za-z0-9 &\-/]+$")
+_ALLOWED_RE = re.compile(r"^[A-Za-z0-9 ,&\-/]+$")
 
 
 def normalize_name(name: str) -> str:
@@ -64,7 +64,7 @@ def validate_name(name: str, *, min_len: int = 1, max_len: int = 64) -> NameVali
     if len(n) > max_len:
         return NameValidation(False, f"Name must be at most {max_len} characters")
     if not _ALLOWED_RE.match(n):
-        return NameValidation(False, "Only letters, numbers, spaces, and & - / are allowed")
+        return NameValidation(False, "Only letters, numbers, spaces, and , & - / are allowed")
     return NameValidation(True, None)
 
 
