@@ -1,13 +1,61 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>code-review-vite</title>
+    <title>Code Review Tool</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Header -->
+      <header class="header">
+        <h1>Code Review Tool</h1>
+      </header>
+
+      <!-- File Upload Controls -->
+      <div class="controls">
+        <div class="file-input-wrapper">
+          <label for="diff-file" class="file-label">Load Git Diff</label>
+          <input type="file" id="diff-file" accept=".diff,.patch,.txt" />
+          <span class="file-name" id="file-name">No file selected</span>
+        </div>
+      </div>
+
+      <!-- Three-pane layout -->
+      <div class="content">
+        <!-- Diagram Pane -->
+        <div class="pane diagram-pane">
+          <div class="pane-header">Dataflow Diagram</div>
+          <div class="pane-content">
+            <div id="mermaid-diagram">
+              <div class="loading">Load a git diff file to see the dataflow diagram</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Diff Pane -->
+        <div class="pane diff-pane">
+          <div class="pane-header">Diff Details</div>
+          <div class="pane-content">
+            <div id="diff-content">
+              <div class="loading">Select a node in the diagram to see the relevant diff</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Call Hierarchy Pane -->
+        <div class="pane call-hierarchy-pane">
+          <div class="pane-header">Call Hierarchy</div>
+          <div class="pane-content" style="padding: 0">
+            <div id="call-hierarchy-content">
+              <div class="empty-state">Select code in the diff to view call hierarchy</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
-</html>
+ </html>
