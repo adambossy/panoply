@@ -27,7 +27,8 @@
       "@/*": ["./src/*"],
       "@lib/*": ["./src/lib/*"],
       "@components/*": ["./src/components/*"],
-      "@types/*": ["./src/types/*"]
+      "@types/*": ["./src/types/*"],
+      "@types": ["./src/types/index.ts"]
     },
     "types": ["vite/client"]
   },

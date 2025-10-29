@@ -1,2 +1,4 @@
-// Barrel exports added in Step 1.7
+export * from './diff';
+export * from './function';
+export * from './hierarchy';
 
