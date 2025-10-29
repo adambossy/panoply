@@ -1,2 +1,25 @@
-/* CSS added in Step 1.6 */
+:root {
+  /* VS Code Dark Theme */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #2d2d30;
+  --bg-tertiary: #1a1a1a;
+  --border-color: #3e3e42;
+
+  --text-primary: #d4d4d4;
+  --text-secondary: #858585;
+  --text-muted: #cccccc;
+
+  --accent-blue: #0e639c;
+  --accent-blue-hover: #1177bb;
+  --accent-blue-highlight: #264f78;
+
+  --addition-bg: #1e3c1e;
+  --addition-text: #4ec9b0;
+  --deletion-bg: #4b1818;
+  --deletion-text: #f48771;
+
+  --success: #4ec9b0;
+  --error: #f48771;
+  --warning: #dcdcaa;
+}
 

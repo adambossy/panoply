@@ -1,2 +1,4 @@
-/* CSS added in Step 1.6 */
+@import './theme.css';
+@import './layout.css';
+@import './components.css';
 
