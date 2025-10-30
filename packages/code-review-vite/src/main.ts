@@ -8,6 +8,7 @@ import { FileUploader } from '@components/file-uploader';
 import { getElement } from './utils/dom-helpers';
 import { parseDiff } from '@lib/diff-parser';
 import { extractFunctions } from '@lib/function-extractor';
+import { generateMermaidDiagram } from '@lib/diagram-generator';
 
 /**
  * Code Review Tool - Main Application
@@ -65,6 +66,9 @@ class CodeReviewApp {
       const functions = extractFunctions(this.parsedDiff);
       console.log('Functions found:', functions.length);
       console.log('Functions:', functions);
+
+      const diagramCode = generateMermaidDiagram(functions, this.parsedDiff);
+      console.log('Mermaid diagram:', diagramCode);
     } catch (error) {
       console.error('Error parsing diff:', error);
     }
