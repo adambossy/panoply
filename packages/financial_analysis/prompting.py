@@ -120,18 +120,9 @@ def build_user_content(
                 lines.append(f"    - {c_name}")
     hierarchy_text = "\n".join(lines) + "\n"
 
-    header_target = "taxonomy below"
-    refined_text = load_prompt("fa-categorize")
-
-    return (
-        f"{refined_text}\n\n"
-        f"Context: The {header_target}.\n"
-        f"{hierarchy_text}"
-        "Transactions JSON (UTF-8). Begin after the next line with "
-        "BEGIN_TRANSACTIONS_JSON and end at END_TRANSACTIONS_JSON:\n"
-        "BEGIN_TRANSACTIONS_JSON\n"
-        f"{ctv_json}\n"
-        "END_TRANSACTIONS_JSON"
+    template_text = load_prompt("fa-categorize")
+    return template_text.replace("{{TAXONOMY_HIERARCHY}}", hierarchy_text).replace(
+        "{{CTV_JSON}}", ctv_json
     )
 
 
