@@ -9,6 +9,7 @@ import { getElement } from './utils/dom-helpers';
 import { parseDiff } from '@lib/diff-parser';
 import { extractFunctions } from '@lib/function-extractor';
 import { generateMermaidDiagram } from '@lib/diagram-generator';
+import { extractCallHierarchy } from '@lib/call-hierarchy-analyzer';
 
 /**
  * Code Review Tool - Main Application
@@ -77,12 +78,19 @@ class CodeReviewApp {
 
   private handleNodeClick(funcNode: any): void {
     console.log('Node clicked:', funcNode);
-    // TODO: Display diff in Phase 2
+    const file = this.parsedDiff?.files.find(
+      (f: any) => f.newPath === funcNode.file || f.oldPath === funcNode.file
+    );
+    if (file) {
+      this.currentFile = file;
+      this.diffViewer.showFunction(file, funcNode);
+    }
   }
 
   private handleTextSelection(text: string): void {
-    console.log('Text selected:', text);
-    // TODO: Analyze call hierarchy in Phase 2
+    if (!this.currentFile || !this.parsedDiff) return;
+    const hierarchy = extractCallHierarchy(text, this.currentFile, this.parsedDiff);
+    this.hierarchyPanel.show(hierarchy);
   }
 
   destroy(): void {
