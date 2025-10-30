@@ -7,6 +7,7 @@ import { FileUploader } from '@components/file-uploader';
 
 import { getElement } from './utils/dom-helpers';
 import { parseDiff } from '@lib/diff-parser';
+import { extractFunctions } from '@lib/function-extractor';
 
 /**
  * Code Review Tool - Main Application
@@ -60,6 +61,10 @@ class CodeReviewApp {
       this.parsedDiff = parseDiff(content);
       console.log('Parsed diff:', this.parsedDiff);
       console.log('Files found:', this.parsedDiff.files.length);
+
+      const functions = extractFunctions(this.parsedDiff);
+      console.log('Functions found:', functions.length);
+      console.log('Functions:', functions);
     } catch (error) {
       console.error('Error parsing diff:', error);
     }
