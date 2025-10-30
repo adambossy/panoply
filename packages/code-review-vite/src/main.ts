@@ -6,6 +6,7 @@ import { CallHierarchyPanel } from '@components/call-hierarchy-panel';
 import { FileUploader } from '@components/file-uploader';
 
 import { getElement } from './utils/dom-helpers';
+import { parseDiff } from '@lib/diff-parser';
 
 /**
  * Code Review Tool - Main Application
@@ -55,8 +56,13 @@ class CodeReviewApp {
   }
 
   private async handleFileLoad(content: string): Promise<void> {
-    console.log('File loaded, content length:', content.length);
-    // TODO: Parse and render in Phase 2
+    try {
+      this.parsedDiff = parseDiff(content);
+      console.log('Parsed diff:', this.parsedDiff);
+      console.log('Files found:', this.parsedDiff.files.length);
+    } catch (error) {
+      console.error('Error parsing diff:', error);
+    }
   }
 
   private handleNodeClick(funcNode: any): void {
