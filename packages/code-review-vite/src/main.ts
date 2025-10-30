@@ -69,6 +69,7 @@ class CodeReviewApp {
 
       const diagramCode = generateMermaidDiagram(functions, this.parsedDiff);
       console.log('Mermaid diagram:', diagramCode);
+      await this.diagram.render(functions, diagramCode);
     } catch (error) {
       console.error('Error parsing diff:', error);
     }
