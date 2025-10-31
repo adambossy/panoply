@@ -11,16 +11,13 @@ variables (notably ``OPENAI_API_KEY``) are loaded from a local ``.env`` using
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from dotenv import load_dotenv
 from typer.models import OptionInfo
 
-from .categories import (
-    load_taxonomy_from_db,
-)
-from .categorize import categorize_expenses
+# Note: Heavy lifters are imported lazily in handlers to keep import cost low
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,15 +79,13 @@ def cmd_categorize_expenses(csv_path: str) -> int:
         Filesystem path to the CSV file.
     """
 
-    import csv
+    load_dotenv()
     import os
     import sys
 
     # Local imports to keep CLI dependency surface minimal
-    from .ingest.adapters.amex_enhanced_details_csv import (
-        to_ctv_enhanced_details,
-    )
-    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+    from .ingest.utils import load_ctv_from_amex_csv
+    from .pre_review import materialize_final_results_for_print, prepare_pre_review
 
     # Validate environment early so failures are clear
     if not os.getenv("OPENAI_API_KEY"):
@@ -103,33 +98,9 @@ def cmd_categorize_expenses(csv_path: str) -> int:
     # ``csv.Error`` with an informative message when the header cannot be
     # located or required columns are missing.
     try:
-        with open(csv_path, encoding="utf-8", newline="") as f:
-            try:
-                # Prefer Enhanced Details adapter (handles preamble and exact header).
-                ctv_items = list(to_ctv_enhanced_details(f))
-            except csv.Error as err:
-                # Fallback: standard AmEx-like CSV where the header is on the first row.
-                f.seek(0)
-                reader = csv.DictReader(f)
-                headers = reader.fieldnames
-                required_headers = {
-                    "Reference",
-                    "Description",
-                    "Amount",
-                    "Date",
-                    "Appears On Your Statement As",
-                    "Extended Details",
-                }
-                if headers is None:
-                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
-                missing = sorted(h for h in required_headers if h not in headers)
-                if missing:
-                    raise csv.Error(
-                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
-                        + ", ".join(missing)
-                    ) from err
-                ctv_items = list(to_ctv_standard(reader))
+        import csv
 
+        ctv_items = load_ctv_from_amex_csv(csv_path)
     except FileNotFoundError:
         print(f"Error: File not found: {csv_path}", file=sys.stderr)
         return 1
@@ -143,25 +114,19 @@ def cmd_categorize_expenses(csv_path: str) -> int:
         print(f"Error: Unexpected failure reading '{csv_path}': {e}", file=sys.stderr)
         return 1
 
-    # Load taxonomy from DB via shared helper (env DATABASE_URL is used by default)
+    # Shared pre-review (no persistence in this programmatic wrapper)
     try:
-        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=None)
-    except Exception as e:
-        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
-        return 1
-
-    # Call the categorization API and print results
-    try:
-        results = list(
-            categorize_expenses(
-                ctv_items,
-                taxonomy=taxonomy,
-            )
+        ctx = prepare_pre_review(
+            ctv_items,
+            database_url=None,
+            source_provider="amex",
+            source_account=None,
+            persist_db_prefill=False,
+            persist_auto_apply=False,
         )
+        results = materialize_final_results_for_print(ctx)
     except Exception as e:
-        # Provide a concise message; the API validates inputs and may raise
-        # ValueError/TypeError for schema or OpenAI/network issues.
-        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        print(f"Error: categorize failed: {e}", file=sys.stderr)
         return 1
 
     # Emit one line per transaction: "<id>\t<category>"
@@ -359,12 +324,14 @@ def categorize_expenses_cmd(
     load_dotenv()
 
     # Deferred imports to keep CLI startup fast
-    import csv
     import os
     import sys
 
-    from .ingest.adapters.amex_enhanced_details_csv import to_ctv_enhanced_details
-    from .ingest.adapters.amex_like_csv import to_ctv as to_ctv_standard
+    from .ingest.utils import load_ctv_from_amex_csv
+    from .pre_review import (
+        materialize_final_results_for_print,
+        prepare_pre_review,
+    )
 
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY is not set in the environment.", file=sys.stderr)
@@ -372,30 +339,9 @@ def categorize_expenses_cmd(
 
     # Load and normalize the CSV into CTV rows
     try:
-        with open(csv_path, encoding="utf-8", newline="") as f:
-            try:
-                ctv_items = list(to_ctv_enhanced_details(f))
-            except csv.Error as err:
-                f.seek(0)
-                reader = csv.DictReader(f)
-                headers = reader.fieldnames
-                required_headers = {
-                    "Reference",
-                    "Description",
-                    "Amount",
-                    "Date",
-                    "Appears On Your Statement As",
-                    "Extended Details",
-                }
-                if headers is None:
-                    raise csv.Error(f"CSV appears to have no header row: {csv_path}") from err
-                missing = sorted(h for h in required_headers if h not in headers)
-                if missing:
-                    raise csv.Error(
-                        "CSV header mismatch for AmEx-like adapter. Missing columns: "
-                        + ", ".join(missing)
-                    ) from err
-                ctv_items = list(to_ctv_standard(reader))
+        import csv
+
+        ctv_items = load_ctv_from_amex_csv(str(csv_path))
     except FileNotFoundError:
         print(f"Error: File not found: {csv_path}", file=sys.stderr)
         return 1
@@ -427,23 +373,19 @@ def categorize_expenses_cmd(
             print(f"Error: persistence (upsert) failed: {e}", file=sys.stderr)
             return 1
 
-    # Load taxonomy from DB via shared helper (respects provided database_url)
+    # Shared pre-review orchestration
     try:
-        taxonomy: list[dict[str, Any]] = load_taxonomy_from_db(database_url=database_url)
-    except Exception as e:
-        print(f"Error: failed to load taxonomy from DB: {e}", file=sys.stderr)
-        return 1
-
-    # Compute categories (network-bound) outside of any DB transaction.
-    try:
-        results = list(
-            categorize_expenses(
-                ctv_items,
-                taxonomy=taxonomy,
-            )
+        ctx = prepare_pre_review(
+            ctv_items,
+            database_url=database_url,
+            source_provider=source_provider,
+            source_account=source_account,
+            persist_db_prefill=persist,
+            persist_auto_apply=persist,
         )
+        results = materialize_final_results_for_print(ctx)
     except Exception as e:
-        print(f"Error: categorize_expenses failed: {e}", file=sys.stderr)
+        print(f"Error: pre-review failed: {e}", file=sys.stderr)
         return 1
 
     # Apply category updates in a second short transaction when persisting.
@@ -459,6 +401,8 @@ def categorize_expenses_cmd(
                     categorized=results,
                     category_source="llm",
                     category_confidence=None,
+                    only_unverified=True,
+                    use_item_confidence=True,
                 )
         except Exception as e:
             print(f"Error: persistence (category updates) failed: {e}", file=sys.stderr)
