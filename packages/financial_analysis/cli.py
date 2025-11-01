@@ -306,7 +306,6 @@ def cmd_review_transaction_categories(
             source_provider=source_provider,
             source_account=source_account,
             allow_create=allow_create,
-            on_progress=print,
         )
         return 0
     except ImportError as e:
