@@ -95,3 +95,38 @@ def test_exact_category_enter_returns_exact_value():
             list(TEST_ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
         )
         assert result == "Coffee Shops"
+
+
+def test_first_char_replaces_prefill():
+    # With a prefilled default, typing a non-space/Backspace character
+    # replaces the entire suggestion so users can start fresh quickly.
+    default = "Shopping"
+    with pipe_session() as (pipe, sess):
+        pipe.send_text("x\r")
+        result = select_category_or_create(
+            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+        )
+        assert result == "x"
+
+
+def test_backspace_builds_on_prefill():
+    # Backspace deletes one char; Enter then applies the inline prefix suggestion,
+    # re-completing to the full category.
+    default = "Shopping"
+    with pipe_session() as (pipe, sess):
+        pipe.send_text("\x7f\r")
+        result = select_category_or_create(
+            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+        )
+        assert result == "Shopping"
+
+
+def test_space_builds_on_prefill():
+    # Space should append a literal space to the suggestion (keep building).
+    default = "Shopping"
+    with pipe_session() as (pipe, sess):
+        pipe.send_text(" \r")
+        result = select_category_or_create(
+            list(ALLOWED_CATEGORIES), default=default, session=sess, allow_create=False
+        )
+        assert result == "Shopping "
