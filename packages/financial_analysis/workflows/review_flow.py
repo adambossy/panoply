@@ -18,7 +18,6 @@ from ..pre_review import prepare_pre_review
 from ..review import review_transaction_categories
 
 
-
 def review_categories_from_csv(
     csv_path: str | PathLike[str],
     *,
