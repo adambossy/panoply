@@ -29,6 +29,7 @@ Note: This workspace uses uv-managed execution. Prefer running tools via `uv run
 - Lint (Ruff): `uv run ruff check .`
 - Type-check: `uv run mypy .`
 - Format: `uv run ruff format .`
+- Dead code: `uv run deadcode .`
 
 ## Workspace layout
 
@@ -49,7 +50,7 @@ Note: This workspace uses uv-managed execution. Prefer running tools via `uv run
 
 ## What's included now
 - uv workspace configuration targeting Python 3.12
-- Baseline tooling: pytest, ruff, mypy, pre-commit (workspace-level dependency groups)
+- Baseline tooling: pytest, ruff, mypy, deadcode, pre-commit (workspace-level dependency groups)
 - Shared database library at `libs/db` with placeholders for SQLAlchemy models, Alembic config, and a Supabase/DB client module
 - Package scaffolding guide at `packages/README.md`
 

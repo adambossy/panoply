@@ -40,9 +40,10 @@ uv run --package <dist-name> pytest -q
 uv run pre-commit run --all-files
 ```
 
-## Formatting & CI
+## Formatting, Static Analysis & CI
 
-We use Ruff for both linting and formatting.
+We use Ruff for both linting and formatting, MyPy for type checking, and
+`deadcode` to detect unused code.
 
 - Local: install the Git hook once so staged files are auto-formatted on commit:
   ```bash
@@ -58,8 +59,13 @@ We use Ruff for both linting and formatting.
   enforcing `uv run ruff format --check .`. For PRs from forks, the workflow
   cannot push commits; please format locally or enable pre-commit.ci.
 
+- Dead code: run locally to find unused code; CI will fail if unused code is reported.
+  ```bash
+  uv run deadcode .
+  ```
+
 Coding standards
-- Ruff and mypy configs live at the repo root and apply to all members.
+- Ruff, mypy, and deadcode configs live at the repo root and apply to all members.
 - Prefer Pydantic for request/response DTOs and internal schemas.
 
 Secrets & environment
