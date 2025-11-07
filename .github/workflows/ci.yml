@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize]
     branches:
       - main
   push:
@@ -70,14 +71,10 @@ jobs:
         run: uv run mypy .
 
   format_autofix_pr:
-    name: Format autofix (PR) • Ubuntu
+    name: Format (PR) • Ubuntu
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: ${{ github.event_name == 'pull_request' }}
-    # Expose whether we actually pushed an autofix commit so downstream jobs can
-    # skip redundant read-only checks in the same run (the follow-up run will enforce it).
-    outputs:
-      pushed: ${{ steps.auto_commit.outputs.pushed || steps.auto_commit.outputs.changes_detected }}
     permissions:
       contents: write
     # Make this job's concurrency unique per run to prevent a subsequent run's
@@ -108,18 +105,24 @@ jobs:
       - name: Sync workspace dependencies (locked)
         run: uv sync --locked
 
-      # Attempt to auto-fix formatting and lint issues on same-repo PRs.
+      # 1) Read-only format check first (non-fatal). If it passes, we stop here.
+      - name: Format check (read-only)
+        id: fmt_check
+        continue-on-error: true
+        run: uv run ruff format --check .
+
+      # 2) If the check failed, attempt to autofix on same-repo PRs.
       - name: Run Ruff autofix
-        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+        if: ${{ steps.fmt_check.outcome == 'failure' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
         continue-on-error: true
         run: |
           uv run ruff check --fix .
           uv run ruff format .
 
       - name: Commit formatting changes
-        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
-        continue-on-error: true
         id: auto_commit
+        if: ${{ steps.fmt_check.outcome == 'failure' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+        continue-on-error: true
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore(format): apply Ruff fixes"
@@ -128,67 +131,15 @@ jobs:
           branch: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  format_check_pr:
-    name: Format check • Ubuntu
-    if: ${{ github.event_name == 'pull_request' && needs.format_autofix_pr.outputs.pushed != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.sha }}
-      cancel-in-progress: true
-    needs: [format_autofix_pr]
-    # Only run the read-only check when the autofix job did not push changes.
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # 3) If check failed and we could not push (forks/permissions), fail with guidance.
+      - name: Fail when formatting changes could not be pushed
+        if: ${{ steps.fmt_check.outcome == 'failure' && steps.auto_commit.outputs.pushed != 'true' }}
+        run: |
+          echo "Formatting required but could not be pushed. Please run:"
+          echo "  uv run ruff check --fix . && uv run ruff format ."
+          exit 1
 
-      - name: Set up Python (from .python-version)
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-
-      - name: Sync workspace dependencies (locked)
-        run: uv sync --locked
-
-      - name: Format check (ruff)
-        run: uv run ruff format --check .
-
-  format_check_push:
-    name: Format check • Ubuntu
-    if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python (from .python-version)
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-
-      - name: Sync workspace dependencies (locked)
-        run: uv sync --locked
-
-      - name: Format check (ruff)
-        run: uv run ruff format --check .
+  
 
   test:
     name: Tests • Ubuntu
