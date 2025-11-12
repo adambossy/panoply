@@ -698,6 +698,9 @@ def review_transaction_categories(
         group_roots.sort(key=lambda r: (-rem_by_root[r], min(groups_map[r])))
 
         # Summary before review starts
+        print_fn(
+            f"Review: groups={len(group_roots)} threshold={MIN_CONFIDENCE} exemplars={exemplars}"
+        )
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
         print_fn(
             _format_pre_review_summary(

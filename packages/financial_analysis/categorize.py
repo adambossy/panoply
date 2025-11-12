@@ -238,6 +238,12 @@ def _categorize_page(
         exemplar_abs_indices=exemplar_abs_indices,
     )
     if cached is not None:
+        # Visible signal for cache hit (kept concise and structured for grep/parse)
+        _logger.info(
+            "categorize_expenses:page_cache_hit page_index=%d num_transactions=%d",
+            page_index,
+            len(cached),
+        )
         return PageResult(page_index=page_index, results=cached)
 
     # Instantiate the client once per page and reuse across retries.
@@ -280,6 +286,14 @@ def _categorize_page(
                 original_seq=original_seq,
                 exemplar_abs_indices=exemplar_abs_indices,
                 items=out,
+            )
+            # Completion signal for successful model call on this page (cache miss path)
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            _logger.info(
+                "categorize_expenses:page_done page_index=%d num_transactions=%d latency_ms=%.2f",
+                page_index,
+                len(out),
+                dt_ms,
             )
             return PageResult(page_index=page_index, results=out)
         except Exception as e:  # noqa: BLE001
@@ -396,8 +410,15 @@ def prefill_unanimous_groups_from_db(
     prefilled_positions: set[int] = set()
     prefilled_groups = 0
 
+    # Emit a concise start line with group counts to help operators trace work
+    _logger.info(
+        "prefill:start groups=%d singletons=%d",
+        len(by_key),
+        len(_singletons),
+    )
+
     with session_scope(database_url=database_url) as session:
-        for positions in by_key.values():
+        for key, positions in by_key.items():
             if not positions:
                 continue
 
@@ -448,6 +469,21 @@ def prefill_unanimous_groups_from_db(
             prefilled_positions.update(positions)
             prefilled_groups += 1
 
+            # Log per-group application with normalized merchant key (ASCII, explicit quoting)
+            key_short = key if len(key) <= 40 else (key[:37] + "...")
+            _logger.info(
+                'prefill:applied key="%s" size=%d category=%s',
+                key_short,
+                len(positions),
+                unanimous,
+            )
+
+    # Final summary line to aid operators and tests
+    _logger.info(
+        "prefill:summary groups_applied=%d positions_assigned=%d",
+        prefilled_groups,
+        len(prefilled_positions),
+    )
     return prefilled_positions, prefilled_groups
 
 
