@@ -15,12 +15,12 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from db.client import session_scope
-from db.models.finance import FaCategory
-from sqlalchemy import select
+from db.models.finance import FaCategory, FaTransaction
+from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from .categories import createCategory, list_top_level_categories
-from .duplicates import PreparedItem, persist_group, query_group_duplicates
+from .duplicates import PreparedItem, persist_group
 from .models import CategorizedTransaction
 from .persistence import compute_fingerprint
 from .term_ui import (
@@ -140,6 +140,66 @@ def _build_groups(prepared: list[PreparedItem]) -> dict[int, list[int]]:
 def _load_allowed_categories(session) -> set[str]:
     # Use scalars() for clarity and to avoid tuple indexing
     return set(session.scalars(select(FaCategory.code)).all())
+
+
+def _query_group_duplicates(
+    session,
+    *,
+    source_provider: str,
+    source_account: str | None,
+    group_eids: list[str],
+    group_fps: list[str],
+    group_merch_keys: list[str] | None,
+    exemplars: int,
+) -> tuple[list[tuple[str | None, Mapping[str, Any]]], str | None]:
+    """Return a limited sample of duplicates and a unanimous default category.
+
+    Optimizes IO by splitting the work into:
+    - an aggregate over matches to determine if all non-null categories agree;
+    - a limited sample (``exemplars``) of rows for display.
+    """
+    conds = []
+    if group_eids:
+        conds.append(FaTransaction.external_id.in_(group_eids))
+    if group_fps:
+        conds.append(FaTransaction.fingerprint_sha256.in_(group_fps))
+    if group_merch_keys:
+        conds.append(FaTransaction.merchant_norm.in_(group_merch_keys))
+
+    rows: list[tuple[str | None, Mapping[str, Any]]] = []
+    unanimous: str | None = None
+    if conds:
+        base_filters = (
+            (FaTransaction.source_provider == source_provider),
+            (FaTransaction.source_account == source_account),
+            or_(*conds),
+        )
+
+        # Aggregate: count distinct non-null categories among matches
+        agg_stmt = (
+            select(func.count(distinct(FaTransaction.category)))
+            .where(*base_filters)
+            .where(FaTransaction.category.is_not(None))
+        )
+        distinct_count = session.execute(agg_stmt).scalar_one()
+        if distinct_count == 1:
+            # Fetch the single category value
+            unanimous = session.execute(
+                select(FaTransaction.category)
+                .where(*base_filters)
+                .where(FaTransaction.category.is_not(None))
+                .limit(1)
+            ).scalar_one()
+
+        # Fetch a limited sample for display
+        rows_stmt = (
+            select(FaTransaction.category, FaTransaction.raw_record)
+            .where(*base_filters)
+            .limit(exemplars)
+        )
+        rows = [(row[0], row[1]) for row in session.execute(rows_stmt).all()]
+
+    return rows, unanimous
 
 
 def _best_display_name_candidate(group_items: list[PreparedItem]) -> str:
@@ -669,6 +729,70 @@ def review_transaction_categories(
         if not allowed:
             raise RuntimeError("No categories present in fa_categories; cannot proceed")
 
+        # Prefill: one-time application from DB duplicates before interactive review.
+        # For each normalized merchant/description key present in this session,
+        # look up duplicates in the DB and, when they unanimously agree on a
+        # single non-null category, apply that category to all matching
+        # in-session rows immediately. Persist and mark them as finalized so the
+        # main loop will skip them. Emit one concise line per key.
+        prefilled_assigned: set[int] = set()
+        prefilled_applied: int = 0
+        for _k, positions in by_key.items():
+            if not positions:
+                continue
+            group_items = [prepared[i] for i in positions]
+            group_eids = [p.external_id for p in group_items if p.external_id is not None]
+            group_fps = [p.fingerprint for p in group_items]
+            # Merchant key for this in-session group (single key by construction)
+            group_merch_keys = [_k] if isinstance(_k, str) and _k else []
+
+            _exemplars = 1  # no display required; keep IO small
+            db_dupes, db_default = _query_group_duplicates(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_eids=group_eids,
+                group_fps=group_fps,
+                group_merch_keys=group_merch_keys,
+                exemplars=_exemplars,
+            )
+            if not db_default:
+                continue
+
+            # Persist via shared helper with category_source="rule"
+            persist_group(
+                session,
+                source_provider=source_provider,
+                source_account=source_account,
+                group_items=group_items,
+                final_cat=db_default,
+                category_source="rule",
+            )
+            session.commit()
+
+            for p in positions:
+                prefilled_assigned.add(p)
+                final[prepared[p].pos] = CategorizedTransaction(
+                    transaction=prepared[p].tx,
+                    category=db_default,
+                    rationale="rule: in-session duplicate default",
+                    score=1.0,
+                )
+
+            prefilled_applied += 1
+
+            merchant_display_raw = (
+                group_items[0].tx.get("merchant") or group_items[0].tx.get("description") or ""
+            )
+            merchant_display = str(merchant_display_raw).strip() or "unknown"
+            msg = (
+                f"Applied {db_default} to {len(positions)} in-session duplicates "
+                f"with merchant {merchant_display}."
+            )
+            print_fn(msg)
+
+        # Ensure the interactive loop skips prefilled positions
+        assigned |= prefilled_assigned
         # Compute remaining counts once per group root and consider only groups
         # with remaining items.
         rem_by_root = {r: sum(1 for i in groups_map[r] if i not in assigned) for r in groups_map}
@@ -699,9 +823,10 @@ def review_transaction_categories(
 
         # Summary before review starts
         gated_rem_by_root = {r: rem_by_root[r] for r in group_roots}
+        total_prefilled = (prefilled_groups or 0) + prefilled_applied
         print_fn(
             _format_pre_review_summary(
-                prefilled_groups=prefilled_groups, remaining_by_root=gated_rem_by_root
+                prefilled_groups=total_prefilled, remaining_by_root=gated_rem_by_root
             )
         )
 
@@ -719,12 +844,20 @@ def review_transaction_categories(
             # Query duplicates for this group
             group_eids = [p.external_id for p in group_items if p.external_id is not None]
             group_fps = [p.fingerprint for p in group_items]
-            db_dupes, db_default = query_group_duplicates(
+            # Compute merchant keys present among remaining items (normally one)
+            kset: list[str] = []
+            for prep in group_items:
+                k = _norm_merchant_key(prep.tx)
+                if k is not None and k not in kset:
+                    kset.append(k)
+
+            db_dupes, db_default = _query_group_duplicates(
                 session,
                 source_provider=source_provider,
                 source_account=source_account,
                 group_eids=group_eids,
                 group_fps=group_fps,
+                group_merch_keys=kset,
                 exemplars=exemplars,
             )
 
