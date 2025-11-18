@@ -14,7 +14,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Key the run-level concurrency to the commit SHA so an autofix commit
+  # created within this workflow doesn't cancel the run that created it.
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -98,8 +100,10 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
+      # Make this job's concurrency unique per run to avoid cross-run
+      # interference when a push is created by this job.
+      group: ${{ github.workflow }}-autofix-${{ github.run_id }}
+      cancel-in-progress: false
     steps:
       - name: Checkout (PR head)
         uses: actions/checkout@v4
@@ -107,8 +111,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
-          # Do not leave the workflow token in the repo; the commit step will provide its own token.
-          persist-credentials: false
+          # Keep the Actions token so the auto-commit step can push.
+          persist-credentials: true
 
       - name: Set up Python (from .python-version)
         uses: actions/setup-python@v5
@@ -140,7 +144,7 @@ jobs:
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
           branch: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # No explicit token input is supported in v5; rely on the checkout credentials.
 
   format_check:
     name: Format check • Ubuntu
