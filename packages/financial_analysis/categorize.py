@@ -363,20 +363,22 @@ def _group_by_normalized_merchant(
     return exemplars, by_key, singleton_indices
 
 
-def prefill_unanimous_groups_from_db(
+def _prefill_unanimous_groups_impl(
     ctv_items: list[Mapping[str, Any]],
     *,
     database_url: str | None,
     source_provider: str,
     source_account: str | None,
-) -> tuple[set[int], int]:
-    """Auto-assign unanimous DB categories per group and persist them.
+    persist: bool,
+) -> tuple[set[int], int, dict[int, str]]:
+    """Internal implementation that returns the extended 3-tuple.
 
     Groups transactions by normalized merchant, queries duplicates in the DB
     within the given ``(source_provider, source_account)`` scope, and when all
-    non-null categories agree for a group, persists that category for all
-    positions in the group. Returns a tuple of ``(prefilled_positions,
-    prefilled_groups)``.
+    non-null categories agree for a group, optionally persists that category
+    for all positions in the group. Returns a tuple of
+    ``(prefilled_positions, prefilled_groups, category_by_pos)`` where
+    ``category_by_pos`` maps absolute positions to the unanimous category.
 
     Raises a ``RuntimeError`` with context on grouping failures; DB and
     persistence errors are propagated as-is to the caller.
@@ -395,16 +397,19 @@ def prefill_unanimous_groups_from_db(
 
     prefilled_positions: set[int] = set()
     prefilled_groups = 0
+    category_by_pos: dict[int, str] = {}
 
     with session_scope(database_url=database_url) as session:
+        made_changes = False
         for positions in by_key.values():
             if not positions:
                 continue
 
-            # Build identifiers for DB lookup
+            # Build identifiers for DB lookup (defer PreparedItem until after unanimity)
             group_eids: list[str] = []
             group_fps: list[str] = []
-            group_items: list[PreparedItem] = []
+            fps_by_pos: dict[int, str] = {}
+            eids_by_pos: dict[int, str | None] = {}
             for i in positions:
                 tx = ctv_items[i]
                 tx_id_val = tx.get("id")
@@ -413,15 +418,8 @@ def prefill_unanimous_groups_from_db(
                     group_eids.append(eid)
                 fp = compute_fingerprint(source_provider=source_provider, tx=tx)
                 group_fps.append(fp)
-                group_items.append(
-                    PreparedItem(
-                        pos=i,
-                        tx=tx,
-                        external_id=eid,
-                        fingerprint=fp,
-                        suggested="",  # not used in persistence path
-                    )
-                )
+                fps_by_pos[i] = fp
+                eids_by_pos[i] = eid
 
             # Query duplicates once per group; when unanimous, auto-apply
             _dupes, unanimous = query_group_duplicates(
@@ -434,21 +432,84 @@ def prefill_unanimous_groups_from_db(
             )
             if not unanimous:
                 continue
-
-            persist_group(
-                session,
-                source_provider=source_provider,
-                source_account=source_account,
-                group_items=group_items,
-                final_cat=unanimous,
-                category_source="rule",
-            )
-            session.commit()
+            if persist:
+                group_items: list[PreparedItem] = [
+                    PreparedItem(
+                        pos=i,
+                        tx=ctv_items[i],
+                        external_id=eids_by_pos[i],
+                        fingerprint=fps_by_pos[i],
+                        suggested="",
+                    )
+                    for i in positions
+                ]
+                persist_group(
+                    session,
+                    source_provider=source_provider,
+                    source_account=source_account,
+                    group_items=group_items,
+                    final_cat=unanimous,
+                    category_source="rule",
+                )
+                session.flush()  # surface integrity issues early per group
+                made_changes = True
 
             prefilled_positions.update(positions)
             prefilled_groups += 1
+            # Record mapping for downstream merge/printing
+            for i in positions:
+                category_by_pos[i] = unanimous
 
-    return prefilled_positions, prefilled_groups
+        if persist and made_changes:
+            session.commit()
+
+    return prefilled_positions, prefilled_groups, category_by_pos
+
+
+def prefill_unanimous_groups_from_db(
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    database_url: str | None,
+    source_provider: str,
+    source_account: str | None,
+    persist: bool = True,
+) -> tuple[set[int], int]:
+    """Compatibility wrapper returning only positions and group count.
+
+    The extended mapping is available via
+    :func:`prefill_unanimous_groups_from_db_with_map`.
+    """
+
+    positions, groups, _ = _prefill_unanimous_groups_impl(
+        ctv_items,
+        database_url=database_url,
+        source_provider=source_provider,
+        source_account=source_account,
+        persist=persist,
+    )
+    return positions, groups
+
+
+def prefill_unanimous_groups_from_db_with_map(
+    ctv_items: list[Mapping[str, Any]],
+    *,
+    database_url: str | None,
+    source_provider: str,
+    source_account: str | None,
+    persist: bool = True,
+) -> tuple[set[int], int, dict[int, str]]:
+    """Return positions, group count, and a mapping of pos→category.
+
+    See :func:`prefill_unanimous_groups_from_db` for behavior notes.
+    """
+
+    return _prefill_unanimous_groups_impl(
+        ctv_items,
+        database_url=database_url,
+        source_provider=source_provider,
+        source_account=source_account,
+        persist=persist,
+    )
 
 
 def _fan_out_group_decisions(
